@@ -1,0 +1,34 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Node.js
+node_modules/
+dist/
+package-lock.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data
+data/
+add_settings.sql
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# System
+.DS_Store
+Thumbs.db
