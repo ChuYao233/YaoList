@@ -24,6 +24,11 @@ use rand::Rng;
 mod drivers;
 use drivers::{Driver, FileInfo};
 
+mod auth {
+    include!("src/auth.rs");
+}
+use auth::{verify_permissions, is_admin, get_current_user, UserPermissions};
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ListParams {
     path: String,
@@ -648,8 +653,8 @@ async fn list_files(
     Extension(pool): Extension<SqlitePool>,
 ) -> Result<Json<Vec<FileInfo>>, (StatusCode, String)> {
     // 验证用户权限
-    let (username, _) = authenticate_user(&headers, &pool, PERM_LIST).await?;
-
+    let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
+    
     let request_path = if params.path.trim().is_empty() || params.path == "/" {
         "/".to_string()
     } else {
@@ -749,13 +754,13 @@ async fn file_info(
     Extension(pool): Extension<SqlitePool>,
 ) -> Result<Json<FileInfo>, (StatusCode, String)> {
     // 验证用户权限
-    let (username, _) = authenticate_user(&headers, &pool, PERM_DOWNLOAD).await?;
-
+    let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
+    
     let path = &params.path;
     
     // 检查用户权限
     let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(&username)
+        .bind(&user_perms.username)
         .fetch_optional(&pool)
         .await
         .unwrap();
@@ -903,6 +908,12 @@ async fn upload_file(
     Extension(pool): Extension<SqlitePool>,
     mut multipart: axum::extract::Multipart,
 ) -> impl IntoResponse {
+    // 验证用户权限
+    let user_perms = match verify_permissions(&headers, &pool, PERM_UPLOAD).await {
+        Ok(perms) => perms,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+    
     println!("开始处理上传请求");
     
     // 认证检查
@@ -1130,6 +1141,9 @@ async fn delete_file(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<DeleteParams>,
 ) -> Result<Json<()>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_DELETE).await?;
+    
     let username = headers.get("x-username").and_then(|v| v.to_str().ok());
     if username.is_none() {
         return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
@@ -1187,6 +1201,9 @@ async fn rename_file(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<RenameParams>,
 ) -> Result<Json<()>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_RENAME).await?;
+    
     let username = headers.get("x-username").and_then(|v| v.to_str().ok());
     if username.is_none() {
         return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
@@ -1259,6 +1276,9 @@ async fn create_folder(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<CreateFolderParams>,
 ) -> Result<Json<()>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_UPLOAD).await?;
+    
     let username = headers.get("x-username").and_then(|v| v.to_str().ok());
     if username.is_none() {
         return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
@@ -1319,29 +1339,13 @@ async fn list_storages(
     headers: HeaderMap,
     Extension(pool): Extension<SqlitePool>,
 ) -> Result<Json<Vec<Storage>>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     let storages: Vec<Storage> = sqlx::query_as::<_, Storage>(
-        "SELECT id, name, storage_type, config, mount_path, enabled, created_at FROM storages ORDER BY created_at DESC"
+        "SELECT id, name, storage_type, config, mount_path, enabled, created_at FROM storages"
     )
     .fetch_all(&pool)
     .await
@@ -1356,26 +1360,16 @@ async fn create_storage(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<CreateStorage>,
 ) -> Result<Json<Storage>, (StatusCode, String)> {
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+    }
+    
     let username = headers.get("x-username").and_then(|v| v.to_str().ok());
     if username.is_none() {
         return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
     }
     let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
-    }
 
     // 创建存储
     let config_json = serde_json::to_string(&payload.config)
@@ -1649,9 +1643,14 @@ async fn download_file(
     Extension(pool): Extension<SqlitePool>,
 ) -> impl IntoResponse {
     let path = params.get("path").cloned().unwrap_or_else(|| "".to_string());
+    let username = params.get("x-username").cloned().unwrap_or_else(|| "guest".to_string());
+    
+    // 构建新的请求头，包含用户名
+    let mut auth_headers = headers.clone();
+    auth_headers.insert("x-username", username.parse().unwrap());
     
     // 验证用户权限
-    match authenticate_user(&headers, &pool, PERM_DOWNLOAD).await {
+    match verify_permissions(&auth_headers, &pool, PERM_DOWNLOAD).await {
         Ok(_) => (),
         Err((status, message)) => return (status, message).into_response(),
     };
@@ -1685,7 +1684,7 @@ async fn download_file(
             // 重定向到特殊下载链接
             let mut headers = HeaderMap::new();
             headers.insert("location", download_url.parse().unwrap());
-            (StatusCode::FOUND, headers, "").into_response()
+            return (StatusCode::FOUND, headers, "").into_response();
         },
         Ok(None) => {
             // 检查是否有 Range 请求头
@@ -1704,7 +1703,7 @@ async fn download_file(
                     
                     // 尝试使用支持 Range 的流式下载
                     match driver.stream_download_with_range(&relative_path, start, end).await {
-                        Ok(Some((stream, filename, file_size, content_length))) => {
+                        Ok(Some((stream, filename, total_size, content_length))) => {
                             let mut response_headers = HeaderMap::new();
                             
                             // 设置 Content-Type 为视频类型以支持预览
@@ -1723,16 +1722,26 @@ async fn download_file(
                             response_headers.insert("content-type", content_type.parse().unwrap());
                             response_headers.insert("accept-ranges", "bytes".parse().unwrap());
                             
-                            if let Some(content_len) = content_length {
-                                response_headers.insert("content-length", content_len.to_string().parse().unwrap());
-                                let actual_start = start.unwrap_or(0);
-                                let actual_end = actual_start + content_len - 1;
-                                response_headers.insert("content-range", 
-                                    format!("bytes {}-{}/{}", actual_start, actual_end, file_size).parse().unwrap());
-                                
-                                let body = axum::body::Body::from_stream(stream);
-                                return (StatusCode::PARTIAL_CONTENT, response_headers, body).into_response();
+                            // 设置 Content-Range 头
+                            let content_range = match (start, end) {
+                                (Some(s), Some(e)) => format!("bytes {}-{}/{}", s, e, total_size),
+                                (Some(s), None) => format!("bytes {}-{}/{}", s, total_size - 1, total_size),
+                                _ => format!("bytes */{}", total_size),
+                            };
+                            response_headers.insert("content-range", content_range.parse().unwrap());
+                            
+                            // 设置 Content-Length 头
+                            if let Some(length) = content_length {
+                                response_headers.insert("content-length", length.to_string().parse().unwrap());
                             }
+                            
+                            // 设置正确的文件名，支持中文文件名
+                            let encoded_filename = urlencoding::encode(&filename);
+                            response_headers.insert("content-disposition", 
+                                format!("inline; filename=\"{}\"; filename*=UTF-8''{}", filename, encoded_filename).parse().unwrap());
+                            
+                            let body = axum::body::Body::from_stream(stream);
+                            return (StatusCode::PARTIAL_CONTENT, response_headers, body).into_response();
                         },
                         Ok(None) => {
                             // Range 流式下载不支持，继续使用普通流式下载
@@ -1746,7 +1755,7 @@ async fn download_file(
             }
             
             // 首先尝试流式下载
-                            match driver.stream_download(&relative_path).await {
+            match driver.stream_download(&relative_path).await {
                 Ok(Some((stream, filename))) => {
                     // 使用流式下载
                     let mut response_headers = HeaderMap::new();
@@ -1774,7 +1783,7 @@ async fn download_file(
                         format!("inline; filename=\"{}\"; filename*=UTF-8''{}", filename, encoded_filename).parse().unwrap());
                     
                     let body = axum::body::Body::from_stream(stream);
-                    (StatusCode::OK, response_headers, body).into_response()
+                    return (StatusCode::OK, response_headers, body).into_response();
                 },
                 Ok(None) => {
                     // 流式下载不可用，使用标准文件下载
@@ -1799,23 +1808,23 @@ async fn download_file(
                                     response_headers.insert("content-type", "application/octet-stream".parse().unwrap());
                                     response_headers.insert("content-length", buffer.len().to_string().parse().unwrap());
                                     
-                                    (StatusCode::OK, response_headers, buffer).into_response()
+                                    return (StatusCode::OK, response_headers, buffer).into_response();
                                 },
                                 Err(e) => {
                                     println!("❌ 读取文件内容失败: {}", e);
-                                    (StatusCode::INTERNAL_SERVER_ERROR, format!("读取文件失败: {}", e)).into_response()
+                                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("读取文件失败: {}", e)).into_response();
                                 }
                             }
                         },
                         Err(e) => {
                             println!("❌ 下载文件失败: {}", e);
-                            (StatusCode::NOT_FOUND, e.to_string()).into_response()
+                            return (StatusCode::NOT_FOUND, e.to_string()).into_response();
                         },
                     }
                 },
                 Err(e) => {
                     println!("❌ 流式下载失败: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, format!("流式下载失败: {}", e)).into_response()
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("流式下载失败: {}", e)).into_response();
                 },
             }
         },

@@ -36,3 +36,7 @@ suppaftp = { version = "5.2", features = ["async-native-tls"] }
 encoding_rs = "0.8"
 futures-lite = "2.1"
 digest = "0.10"
+
+[[bin]]
+name = "yaolist"
+path = "main.rs"
