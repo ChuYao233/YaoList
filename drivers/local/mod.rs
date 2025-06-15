@@ -11,11 +11,11 @@ pub struct LocalDriver {
 
 #[async_trait]
 impl Driver for LocalDriver {
-    async fn move_file(&self, _file_id: &str, _new_parent_id: &str) -> anyhow::Result<()> {
+    async fn move_file(&self, _file_path: &str, _new_parent_path: &str) -> anyhow::Result<()> {
         Err(anyhow::anyhow!("本地驱动不支持移动操作"))
     }
 
-    async fn copy_file(&self, _file_id: &str, _new_parent_id: &str) -> anyhow::Result<()> {
+    async fn copy_file(&self, _file_path: &str, _new_parent_path: &str) -> anyhow::Result<()> {
         Err(anyhow::anyhow!("本地驱动不支持复制操作"))
     }
 

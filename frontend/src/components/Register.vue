@@ -136,7 +136,7 @@ async function onRegister() {
   try {
     const res = await axios.post('/api/register', form.value)
     if (res.status === 200 && res.data.username) {
-      localStorage.setItem('yaolist_user', JSON.stringify(res.data))
+      // 不再存储用户信息到localStorage，依赖Cookie认证
       notification.success('注册成功，正在跳转...')
       emit('register-success', res.data)
       setTimeout(() => {
@@ -524,21 +524,97 @@ onMounted(() => {
   background: #66b1ff !important;
 }
 
-/* 响应式设计 */
-@media (max-width: 480px) {
+/* 移动端响应式样式 */
+@media (max-width: 768px) {
+  .register-container {
+    padding: 16px;
+    min-height: 100vh;
+  }
+  
   .register-card {
-    width: 90%;
+    width: 100%;
+    max-width: 380px;
     padding: 32px 24px;
-    margin: 20px;
+    border-radius: 20px;
   }
   
   .register-title {
     font-size: 2rem;
   }
   
+  .register-subtitle {
+    font-size: 1rem;
+  }
+  
   .site-logo {
-    width: 60px;
-    height: 60px;
+    width: 64px;
+    height: 64px;
+  }
+  
+  .custom-input :deep(.el-input__wrapper) {
+    height: 48px;
+    padding-left: 44px;
+  }
+  
+  .input-icon {
+    left: 14px;
+  }
+  
+  .register-button {
+    height: 48px !important;
+    font-size: 15px !important;
+  }
+  
+  .form-footer {
+    margin-top: 24px;
+    padding-top: 20px;
+  }
+  
+  .footer-text,
+  .login-link {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .register-container {
+    padding: 8px;
+  }
+  
+  .register-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 24px 16px;
+    border-radius: 16px;
+    margin: 0;
+  }
+  
+  .register-title {
+    font-size: 1.8rem;
+  }
+  
+  .site-logo {
+    width: 56px;
+    height: 56px;
+  }
+  
+  .custom-input :deep(.el-input__wrapper) {
+    height: 44px;
+    padding-left: 40px;
+  }
+  
+  .input-icon {
+    left: 12px;
+  }
+  
+  .register-button {
+    height: 44px !important;
+    font-size: 14px !important;
+  }
+  
+  .form-footer {
+    margin-top: 20px;
+    padding-top: 16px;
   }
 }
 </style> 

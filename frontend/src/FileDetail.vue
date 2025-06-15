@@ -291,31 +291,47 @@ const siteInfo = ref({
 const videoPlayer = ref(null);
 const hlsPlayer = ref(null);
 
-// 初始化用户信息
-try {
-  user.value = JSON.parse(localStorage.getItem('yaolist_user') || '{}')
-} catch {
-  user.value = {}
-}
+// 用户信息将通过getCurrentUser函数获取
 
 // 计算属性
+// 辅助函数：将显示路径转换为实际路径
+function displayPathToActualPath(displayPath) {
+  if (!user.value.user_path || user.value.user_path === '/') {
+    return displayPath;
+  }
+  
+  const userBasePath = user.value.user_path.replace(/\/+$/, '');
+  if (displayPath === '/') {
+    return userBasePath;
+  } else {
+    return userBasePath + displayPath;
+  }
+}
+
 const filePath = computed(() => {
   // 清理路径：移除双斜杠，确保路径格式正确
-  let path = decodeURIComponent(route.path);
+  let displayPath = decodeURIComponent(route.path);
   // 移除末尾的斜杠（如果有）
-  path = path.replace(/\/+$/, '');
+  displayPath = displayPath.replace(/\/+$/, '');
   // 替换多个连续斜杠为单个斜杠
-  path = path.replace(/\/+/g, '/');
+  displayPath = displayPath.replace(/\/+/g, '/');
   // 确保路径以/开头
-  if (!path.startsWith('/')) {
-    path = '/' + path;
+  if (!displayPath.startsWith('/') && displayPath !== '') {
+    displayPath = '/' + displayPath;
   }
-  return path;
+  
+  // 将显示路径转换为实际路径
+  const actualPath = displayPathToActualPath(displayPath);
+  
+  return actualPath;
 });
 
 // 路径面包屑
 const pathBreadcrumbs = computed(() => {
-  const parts = filePath.value.replace(/\\/g, '/').split('/').filter(Boolean);
+  // 面包屑应该基于当前的URL路径（用户看到的路径），而不是实际的后端路径
+  let displayPath = decodeURIComponent(route.path).replace(/\\/g, '/');
+  
+  const parts = displayPath.split('/').filter(Boolean);
   const crumbs = [{ name: '🏠主页', path: '/' }];
   let path = '';
   for (const part of parts) {
@@ -359,7 +375,9 @@ function onLogoError(e) {
 }
 
 function navigateTo(path) {
-  router.push(path);
+  // 对显示路径进行URL编码，但保留路径分隔符
+  const encodedPath = path.split('/').map(segment => segment ? encodeURIComponent(segment) : '').join('/');
+  router.push(encodedPath);
 }
 
 function getFileIconSvg() {
@@ -421,12 +439,21 @@ function handleRegister() {
 }
 
 function handleLogout() {
-  user.value = {};
-  localStorage.removeItem('yaolist_user');
-  notification.success('已成功登出');
-  setTimeout(() => {
-    router.push('/login');
-  }, 1000);
+  // 调用登出API
+  axios.post('/api/logout').then(() => {
+    user.value = {};
+    notification.success('已成功登出');
+    setTimeout(() => {
+      router.push('/login');
+    }, 1000);
+  }).catch(() => {
+    // 即使API调用失败，也清除本地状态
+    user.value = {};
+    notification.success('已成功登出');
+    setTimeout(() => {
+      router.push('/login');
+    }, 1000);
+  });
 }
 
 function getFileExtension(filename) {
@@ -487,10 +514,8 @@ async function loadSiteInfo() {
     siteInfo.value = res.data;
     
     console.log('FileDetail 加载站点信息:', {
-      background_image_url: siteInfo.value.background_image_url,
-      enable_glass_effect: siteInfo.value.enable_glass_effect,
-      glass_opacity: siteInfo.value.glass_opacity,
-      glass_blur: siteInfo.value.glass_blur
+      background_url: siteInfo.value.background_url,
+      enable_glass_effect: siteInfo.value.enable_glass_effect
     });
     
     // 应用背景图片和毛玻璃效果
@@ -505,41 +530,29 @@ function applyBackgroundAndGlassEffect() {
   const body = document.body;
   
   // 应用背景图片
-  if (siteInfo.value.background_image_url && siteInfo.value.background_image_url.trim()) {
-    body.style.backgroundImage = `url(${siteInfo.value.background_image_url})`;
+  if (siteInfo.value.background_url && siteInfo.value.background_url.trim()) {
+    body.style.backgroundImage = `url(${siteInfo.value.background_url})`;
     body.style.backgroundSize = 'cover';
     body.style.backgroundPosition = 'center';
     body.style.backgroundRepeat = 'no-repeat';
     body.style.backgroundAttachment = 'fixed';
-    console.log('✅ FileDetail 应用背景图片:', siteInfo.value.background_image_url);
+    body.classList.add('has-background');
+    console.log('✅ FileDetail 应用背景图片:', siteInfo.value.background_url);
   } else {
     body.style.backgroundImage = '';
+    body.classList.remove('has-background');
     console.log('❌ FileDetail 清除背景图片');
   }
   
   // 应用毛玻璃效果
-  const glassElements = document.querySelectorAll('.yaolist-card, .file-info-header, .preview-text, .preview-audio, .preview-office, .preview-pdf, .preview-epub, .preview-error, .preview-unsupported');
+  const glassElements = document.querySelectorAll('.yaolist-card, .file-info-header, .preview-image, .preview-video, .preview-audio, .preview-text, .preview-m3u8, .preview-office, .preview-pdf, .preview-epub, .preview-external, .preview-error, .preview-unsupported');
   console.log('FileDetail 找到元素数量:', glassElements.length);
   
   glassElements.forEach(element => {
-    if (siteInfo.value.enable_glass_effect && siteInfo.value.background_image_url && siteInfo.value.background_image_url.trim()) {
-      // 确保数值类型正确
-      const opacity = parseFloat(siteInfo.value.glass_opacity) || 0.7;
-      const blur = parseFloat(siteInfo.value.glass_blur) || 10;
-      
-      element.style.background = `rgba(255, 255, 255, ${opacity}) !important`;
-      element.style.backdropFilter = `blur(${blur}px) !important`;
-      element.style.webkitBackdropFilter = `blur(${blur}px) !important`;
-      element.style.border = '1px solid rgba(255, 255, 255, 0.3) !important';
-      element.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.1) !important';
+    if (siteInfo.value.enable_glass_effect && siteInfo.value.background_url && siteInfo.value.background_url.trim()) {
       element.classList.add('glass-effect');
-      console.log('✅ FileDetail 应用毛玻璃效果到元素:', element.className, { opacity, blur });
+      console.log('✅ FileDetail 应用毛玻璃效果到元素:', element.className);
     } else {
-      element.style.background = '';
-      element.style.backdropFilter = '';
-      element.style.webkitBackdropFilter = '';
-      element.style.border = '';
-      element.style.boxShadow = '';
       element.classList.remove('glass-effect');
       console.log('❌ FileDetail 清除毛玻璃效果:', element.className);
     }
@@ -561,14 +574,17 @@ async function loadFileInfo() {
     loading.value = true;
     error.value = '';
     
+    // 获取显示路径（用于发送给后端）
+    let displayPath = decodeURIComponent(route.path);
+    displayPath = displayPath.replace(/\/+$/, '').replace(/\/+/g, '/');
+    if (!displayPath.startsWith('/') && displayPath !== '') {
+      displayPath = '/' + displayPath;
+    }
+    
     // 获取文件信息
     const res = await axios.get('/api/fileinfo', {
       params: { 
-        path: filePath.value,
-        'x-username': user.value.username || 'guest'  // 如果未登录则使用guest
-      },
-      headers: {
-        'x-username': user.value.username || 'guest'  // 在header中也设置用户名
+        path: displayPath
       }
     });
     
@@ -576,7 +592,7 @@ async function loadFileInfo() {
     fileName.value = fileInfo.name;
     fileSize.value = fileInfo.size;
     fileModified.value = fileInfo.modified;
-    fileUrl.value = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+    fileUrl.value = `/api/download?path=${encodeURIComponent(displayPath)}`;
     
     // 判断预览类型
     const type = canPreview(fileName.value);
@@ -613,8 +629,15 @@ async function loadFileInfo() {
 
 async function loadTextContent() {
   try {
+    // 获取显示路径
+    let displayPath = decodeURIComponent(route.path);
+    displayPath = displayPath.replace(/\/+$/, '').replace(/\/+/g, '/');
+    if (!displayPath.startsWith('/') && displayPath !== '') {
+      displayPath = '/' + displayPath;
+    }
+    
     // 创建带认证的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(displayPath)}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) {
       throw new Error('加载文本内容失败');
@@ -658,7 +681,7 @@ async function loadTextContent() {
 async function loadM3U8Content() {
   try {
     // 创建带认证的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) {
       throw new Error('加载M3U8内容失败');
@@ -699,7 +722,7 @@ async function loadIframeContent() {
         }
         const viewerUrl = viewers[selectedExternalViewer.value];
         // 创建带认证的URL
-        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}`;
         const encodedUrl = encodeURIComponent(`${window.location.origin}${downloadUrl}`);
         iframeUrl.value = viewerUrl.replace('$e_url', encodedUrl);
       break;
@@ -733,7 +756,7 @@ async function loadExternalContent() {
         }
         const viewerUrl = viewers[selectedExternalViewer.value];
         // 创建带认证的URL
-        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}`;
         const encodedUrl = encodeURIComponent(`${window.location.origin}${downloadUrl}`);
         externalViewerUrl.value = viewerUrl.replace('$e_url', encodedUrl);
       break;
@@ -748,7 +771,7 @@ function switchExternalViewer() {
   if (selectedExternalViewer.value && externalViewers.value[selectedExternalViewer.value]) {
     const template = externalViewers.value[selectedExternalViewer.value];
     // 创建带认证的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}`;
     const encodedUrl = encodeURIComponent(`${window.location.origin}${downloadUrl}`);
     const rawUrl = `${window.location.origin}${downloadUrl}`;
     externalViewerUrl.value = template.replace('$e_url', encodedUrl).replace('$url', rawUrl);
@@ -851,15 +874,18 @@ function handleAudioCoverError(event) {
 // 下载文件
 async function downloadFile() {
   try {
+    // 获取显示路径
+    let displayPath = decodeURIComponent(route.path);
+    displayPath = displayPath.replace(/\/+$/, '').replace(/\/+/g, '/');
+    if (!displayPath.startsWith('/') && displayPath !== '') {
+      displayPath = '/' + displayPath;
+    }
+    
     // 创建一个带有认证信息的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(displayPath)}`;
     
     // 先检查文件是否可访问
-    const checkRes = await axios.head(downloadUrl, {
-      headers: {
-        'x-username': user.value.username || 'guest'
-      }
-    });
+    const checkRes = await axios.head(downloadUrl);
     
     if (checkRes.status === 200) {
       // 使用a标签下载
@@ -886,7 +912,14 @@ async function downloadFile() {
 // 复制链接
 async function copyLink() {
   try {
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+    // 获取显示路径
+    let displayPath = decodeURIComponent(route.path);
+    displayPath = displayPath.replace(/\/+$/, '').replace(/\/+/g, '/');
+    if (!displayPath.startsWith('/') && displayPath !== '') {
+      displayPath = '/' + displayPath;
+    }
+    
+    const downloadUrl = `/api/download?path=${encodeURIComponent(displayPath)}`;
     await navigator.clipboard.writeText(`${window.location.origin}${downloadUrl}`);
     notification.success('链接已复制到剪贴板');
   } catch (err) {
@@ -905,9 +938,36 @@ function toggleDarkMode() {
   }
 }
 
+// 获取当前用户信息
+async function getCurrentUser() {
+  try {
+    const res = await axios.get('/api/user/profile');
+    if (res.status === 200 && res.data.username) {
+      user.value = res.data;
+      return true;
+    }
+  } catch (error) {
+    // 如果获取用户信息失败，尝试游客登录
+    try {
+      const guestRes = await axios.get('/api/guest-login');
+      if (guestRes.status === 200 && guestRes.data.username) {
+        user.value = guestRes.data;
+        return true;
+      }
+    } catch (guestError) {
+      console.log('游客登录失败:', guestError.response?.data);
+    }
+  }
+  return false;
+}
+
 // 生命周期
 onMounted(async () => {
   await loadSiteInfo();
+  
+  // 获取当前用户信息
+  await getCurrentUser();
+  
   await loadFileInfo();
   
   // 应用保存的主题设置
@@ -1210,13 +1270,31 @@ watch(() => route.path, async () => {
 .preview-error,
 .preview-unsupported {
   width: 100%;
-  background: rgba(255, 255, 255, 0.7) !important;
+  background: #fff;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.05);
   overflow: hidden;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  transition: all 0.3s ease;
+}
+
+/* 毛玻璃效果 */
+.preview-image.glass-effect,
+.preview-video.glass-effect,
+.preview-audio.glass-effect,
+.preview-text.glass-effect,
+.preview-m3u8.glass-effect,
+.preview-office.glass-effect,
+.preview-pdf.glass-effect,
+.preview-epub.glass-effect,
+.preview-external.glass-effect,
+.preview-error.glass-effect,
+.preview-unsupported.glass-effect {
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  background: rgba(255, 255, 255, 0.7) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1) !important;
 }
 
 .dark-mode .preview-image,
@@ -1230,8 +1308,23 @@ watch(() => route.path, async () => {
 .dark-mode .preview-external,
 .dark-mode .preview-error,
 .dark-mode .preview-unsupported {
-  background: rgba(30, 30, 30, 0.7) !important;
+  background: #2d2d2d;
   border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dark-mode .preview-image.glass-effect,
+.dark-mode .preview-video.glass-effect,
+.dark-mode .preview-audio.glass-effect,
+.dark-mode .preview-text.glass-effect,
+.dark-mode .preview-m3u8.glass-effect,
+.dark-mode .preview-office.glass-effect,
+.dark-mode .preview-pdf.glass-effect,
+.dark-mode .preview-epub.glass-effect,
+.dark-mode .preview-external.glass-effect,
+.dark-mode .preview-error.glass-effect,
+.dark-mode .preview-unsupported.glass-effect {
+  background: rgba(31, 41, 55, 0.7) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
 }
 
 /* 图片预览 */
@@ -1542,38 +1635,354 @@ watch(() => route.path, async () => {
 /* 响应式设计 */
 @media (max-width: 768px) {
   .yaolist-flex-root {
-    padding: 16px;
+    padding: 8px;
+    min-height: 100vh;
   }
   
+  .yaolist-flex-center {
+    padding: 16px 8px;
+  }
+  
+  /* 标题适配 */
+  .yaolist-title.title-above-card {
+    font-size: 2rem;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  
+  .title-text {
+    font-size: 2rem;
+  }
+  
+  .yaolist-logo-large {
+    width: 40px;
+    height: 40px;
+  }
+  
+  /* 主卡片适配 */
   .yaolist-card {
     margin: 0 auto 16px auto;
-    padding: 20px 16px 16px 16px;
+    padding: 16px 12px;
     border-radius: 16px !important;
+    min-width: auto;
+    width: 100%;
+    max-width: 100%;
   }
   
+  /* 面包屑适配 */
+  .yaolist-path-breadcrumb {
+    padding: 8px 12px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  
+  /* 文件信息头部适配 */
   .file-info-header {
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     align-items: stretch;
+    padding: 12px;
   }
   
   .file-info-left {
     justify-content: center;
+    text-align: center;
+  }
+  
+  .file-icon {
+    width: 48px;
+    height: 48px;
+  }
+  
+  .file-name {
+    font-size: 16px;
+    margin-bottom: 4px;
+  }
+  
+  .file-meta {
+    font-size: 12px;
   }
   
   .file-actions {
     justify-content: center;
+    gap: 8px;
+  }
+  
+  .action-btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  
+  .action-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+  
+  /* 预览容器适配 */
+  .preview-image,
+  .preview-video,
+  .preview-audio,
+  .preview-text,
+  .preview-m3u8,
+  .preview-office,
+  .preview-pdf,
+  .preview-epub,
+  .preview-external,
+  .preview-error,
+  .preview-unsupported {
+    border-radius: 12px;
+    margin-bottom: 16px;
+  }
+  
+  /* 图片预览适配 */
+  .preview-image {
+    padding: 12px;
+  }
+  
+  .preview-image img {
+    max-height: 50vh;
+  }
+  
+  /* 视频预览适配 */
+  .video-player {
+    max-height: 50vh;
+  }
+  
+  /* 音频预览适配 */
+  .preview-audio {
+    padding: 24px 16px;
   }
   
   .audio-cover img {
-    width: 150px;
-    height: 150px;
+    width: 120px;
+    height: 120px;
+  }
+  
+  .audio-title {
+    font-size: 16px;
+  }
+  
+  /* 文本预览适配 */
+  .preview-text {
+    padding: 16px 12px;
+  }
+  
+  .text-toolbar {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+  }
+  
+  .language-select,
+  .viewer-select {
+    font-size: 13px;
+    padding: 4px 8px;
+  }
+  
+  .code-content {
+    font-size: 12px;
+    padding: 12px;
+    max-height: 50vh;
+  }
+  
+  .markdown-content {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  
+  /* Office文档预览适配 */
+  .preview-office,
+  .preview-pdf,
+  .preview-epub,
+  .preview-external {
+    height: 50vh;
+  }
+  
+  .office-toolbar,
+  .external-toolbar {
+    padding: 12px;
+  }
+  
+  /* 错误和不支持类型适配 */
+  .preview-error,
+  .preview-unsupported {
+    padding: 32px 16px;
+  }
+  
+  .error-icon,
+  .unsupported-icon {
+    font-size: 36px;
+    margin-bottom: 12px;
+  }
+  
+  .error-message,
+  .unsupported-message {
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+  
+  .download-btn {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+  
+  /* 主题切换按钮适配 */
+  .theme-toggle-container {
+    top: 12px;
+    right: 12px;
+  }
+  
+  .theme-toggle-btn {
+    width: 40px;
+    height: 40px;
+    padding: 8px;
+  }
+  
+  /* 底部用户信息适配 */
+  .yaolist-bottom-userinfo.userinfo-float {
+    margin: 16px auto;
+    font-size: 14px;
+    padding: 0 16px;
+  }
+}
+
+/* 小屏幕设备适配 */
+@media (max-width: 480px) {
+  .yaolist-flex-root {
+    padding: 4px;
+  }
+  
+  .yaolist-flex-center {
+    padding: 12px 4px;
+  }
+  
+  .yaolist-title.title-above-card {
+    font-size: 1.5rem;
+    margin-bottom: 12px;
+  }
+  
+  .title-text {
+    font-size: 1.5rem;
+  }
+  
+  .yaolist-logo-large {
+    width: 32px;
+    height: 32px;
+  }
+  
+  .yaolist-card {
+    padding: 12px 8px;
+    border-radius: 12px !important;
+  }
+  
+  .yaolist-path-breadcrumb {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  
+  .file-info-header {
+    padding: 8px;
+    gap: 8px;
+  }
+  
+  .file-icon {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .file-name {
+    font-size: 14px;
+  }
+  
+  .file-meta {
+    font-size: 11px;
+  }
+  
+  .action-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  
+  .action-btn svg {
+    width: 12px;
+    height: 12px;
+  }
+  
+  .preview-image {
+    padding: 8px;
+  }
+  
+  .preview-audio {
+    padding: 16px 8px;
+  }
+  
+  .audio-cover img {
+    width: 100px;
+    height: 100px;
+  }
+  
+  .audio-title {
+    font-size: 14px;
+  }
+  
+  .preview-text {
+    padding: 12px 8px;
+  }
+  
+  .code-content {
+    font-size: 11px;
+    padding: 8px;
+    max-height: 40vh;
+  }
+  
+  .markdown-content {
+    font-size: 12px;
   }
   
   .preview-office,
   .preview-pdf,
-  .preview-epub {
-    height: 60vh;
+  .preview-epub,
+  .preview-external {
+    height: 40vh;
+  }
+  
+  .office-toolbar,
+  .external-toolbar {
+    padding: 8px;
+  }
+  
+  .preview-error,
+  .preview-unsupported {
+    padding: 24px 12px;
+  }
+  
+  .error-icon,
+  .unsupported-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+  }
+  
+  .error-message,
+  .unsupported-message {
+    font-size: 14px;
+    margin-bottom: 12px;
+  }
+  
+  .download-btn {
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+  
+  .theme-toggle-btn {
+    width: 36px;
+    height: 36px;
+    padding: 6px;
+  }
+  
+  .theme-toggle-btn svg {
+    width: 16px;
+    height: 16px;
   }
 }
 

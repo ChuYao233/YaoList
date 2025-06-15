@@ -121,10 +121,8 @@ async function loadSiteInfo() {
     siteInfo.value = res.data
     
     console.log('Login 加载站点信息:', {
-      background_image_url: siteInfo.value.background_image_url,
-      enable_glass_effect: siteInfo.value.enable_glass_effect,
-      glass_opacity: siteInfo.value.glass_opacity,
-      glass_blur: siteInfo.value.glass_blur
+      background_url: siteInfo.value.background_url,
+      enable_glass_effect: siteInfo.value.enable_glass_effect
     });
     
     // 应用主题色
@@ -148,15 +146,17 @@ function applyBackgroundAndGlassEffect() {
   const body = document.body;
   
   // 应用背景图片
-  if (siteInfo.value.background_image_url && siteInfo.value.background_image_url.trim()) {
-    body.style.backgroundImage = `url(${siteInfo.value.background_image_url})`;
+  if (siteInfo.value.background_url && siteInfo.value.background_url.trim()) {
+    body.style.backgroundImage = `url(${siteInfo.value.background_url})`;
     body.style.backgroundSize = 'cover';
     body.style.backgroundPosition = 'center';
     body.style.backgroundRepeat = 'no-repeat';
     body.style.backgroundAttachment = 'fixed';
-    console.log('✅ Login 应用背景图片:', siteInfo.value.background_image_url);
+    body.classList.add('has-background');
+    console.log('✅ Login 应用背景图片:', siteInfo.value.background_url);
   } else {
     body.style.backgroundImage = '';
+    body.classList.remove('has-background');
     console.log('❌ Login 清除背景图片');
   }
   
@@ -165,24 +165,10 @@ function applyBackgroundAndGlassEffect() {
   console.log('Login 找到元素数量:', glassElements.length);
   
   glassElements.forEach(element => {
-    if (siteInfo.value.enable_glass_effect && siteInfo.value.background_image_url && siteInfo.value.background_image_url.trim()) {
-      // 确保数值类型正确
-      const opacity = parseFloat(siteInfo.value.glass_opacity) || 0.7;
-      const blur = parseFloat(siteInfo.value.glass_blur) || 10;
-      
-      element.style.background = `rgba(255, 255, 255, ${opacity}) !important`;
-      element.style.backdropFilter = `blur(${blur}px) !important`;
-      element.style.webkitBackdropFilter = `blur(${blur}px) !important`;
-      element.style.border = '1px solid rgba(255, 255, 255, 0.3) !important';
-      element.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.1) !important';
+    if (siteInfo.value.enable_glass_effect && siteInfo.value.background_url && siteInfo.value.background_url.trim()) {
       element.classList.add('glass-effect');
-      console.log('✅ Login 应用毛玻璃效果到元素:', element.className, { opacity, blur });
+      console.log('✅ Login 应用毛玻璃效果到元素:', element.className);
     } else {
-      element.style.background = '';
-      element.style.backdropFilter = '';
-      element.style.webkitBackdropFilter = '';
-      element.style.border = '';
-      element.style.boxShadow = '';
       element.classList.remove('glass-effect');
       console.log('❌ Login 清除毛玻璃效果:', element.className);
     }
@@ -203,7 +189,7 @@ async function onLogin() {
   try {
     const res = await axios.post('/api/login', form.value)
     if (res.status === 200 && res.data.username) {
-      localStorage.setItem('yaolist_user', JSON.stringify(res.data))
+      // 不再存储用户信息到localStorage，依赖Cookie认证
       notification.success('登录成功，正在跳转...')
       emit('login-success', res.data)
       setTimeout(() => {
@@ -224,7 +210,7 @@ async function onGuestLogin() {
   try {
     const res = await axios.get('/api/guest-login')
     if (res.status === 200 && res.data.username) {
-      localStorage.setItem('yaolist_user', JSON.stringify(res.data))
+      // 不再存储用户信息到localStorage，依赖Cookie认证
       notification.success('游客登录成功，正在跳转...')
       emit('login-success', res.data)
       setTimeout(() => {
@@ -325,6 +311,21 @@ onMounted(() => {
   z-index: 2;
   border: 1px solid rgba(255, 255, 255, 0.2);
   animation: slideUp 0.6s ease-out;
+}
+
+/* 毛玻璃效果 */
+.login-card.glass-effect {
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  background: rgba(255, 255, 255, 0.7) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* 暗色模式下的毛玻璃效果 */
+.dark-mode .login-card.glass-effect {
+  background: rgba(31, 41, 55, 0.7) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
 }
 
 @keyframes slideUp {
@@ -667,21 +668,99 @@ onMounted(() => {
   box-shadow: 0 8px 25px rgba(148, 163, 184, 0.3) !important;
 }
 
-/* 响应式设计 */
-@media (max-width: 480px) {
+/* 移动端响应式样式 */
+@media (max-width: 768px) {
+  .login-container {
+    padding: 16px;
+    min-height: 100vh;
+  }
+  
   .login-card {
-    width: 90%;
+    width: 100%;
+    max-width: 380px;
     padding: 32px 24px;
-    margin: 20px;
+    border-radius: 20px;
   }
   
   .login-title {
     font-size: 2rem;
   }
   
+  .login-subtitle {
+    font-size: 1rem;
+  }
+  
   .site-logo {
-    width: 60px;
-    height: 60px;
+    width: 64px;
+    height: 64px;
+  }
+  
+  .custom-input :deep(.el-input__wrapper) {
+    height: 48px;
+    padding-left: 44px;
+  }
+  
+  .input-icon {
+    left: 14px;
+  }
+  
+  .login-button,
+  .guest-button {
+    height: 48px !important;
+    font-size: 15px !important;
+  }
+  
+  .form-footer {
+    margin-top: 24px;
+    padding-top: 20px;
+  }
+  
+  .footer-text,
+  .register-link {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-container {
+    padding: 8px;
+  }
+  
+  .login-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 24px 16px;
+    border-radius: 16px;
+    margin: 0;
+  }
+  
+  .login-title {
+    font-size: 1.8rem;
+  }
+  
+  .site-logo {
+    width: 56px;
+    height: 56px;
+  }
+  
+  .custom-input :deep(.el-input__wrapper) {
+    height: 44px;
+    padding-left: 40px;
+  }
+  
+  .input-icon {
+    left: 12px;
+  }
+  
+  .login-button,
+  .guest-button {
+    height: 44px !important;
+    font-size: 14px !important;
+  }
+  
+  .form-footer {
+    margin-top: 20px;
+    padding-top: 16px;
   }
 }
 </style> 

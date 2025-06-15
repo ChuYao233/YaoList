@@ -2,11 +2,13 @@ pub mod local;
 pub mod onedrive;
 pub mod ftp;
 pub mod quark;
+pub mod s3;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use s3::S3DriverFactory;
 
 #[async_trait]
 pub trait Driver: Send + Sync {
@@ -18,8 +20,8 @@ pub trait Driver: Send + Sync {
     async fn rename(&self, path: &str, new_name: &str) -> anyhow::Result<()>;
     async fn create_folder(&self, parent_path: &str, folder_name: &str) -> anyhow::Result<()>;
     async fn get_file_info(&self, path: &str) -> anyhow::Result<FileInfo>;
-    async fn move_file(&self, file_id: &str, new_parent_id: &str) -> anyhow::Result<()>;
-    async fn copy_file(&self, file_id: &str, new_parent_id: &str) -> anyhow::Result<()>;
+    async fn move_file(&self, file_path: &str, new_parent_path: &str) -> anyhow::Result<()>;
+    async fn copy_file(&self, file_path: &str, new_parent_path: &str) -> anyhow::Result<()>;
     
     // 添加向下转型支持
     fn as_any(&self) -> &dyn std::any::Any;
@@ -76,6 +78,9 @@ static DRIVER_REGISTRY: Lazy<HashMap<String, Box<dyn DriverFactory>>> = Lazy::ne
     
     // 注册夸克网盘驱动
     registry.insert("quark".to_string(), Box::new(quark::QuarkDriverFactory) as Box<dyn DriverFactory>);
+    
+    // 注册S3驱动
+    registry.insert("s3".to_string(), Box::new(S3DriverFactory) as Box<dyn DriverFactory>);
     
     registry
 });
