@@ -223,7 +223,7 @@
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9,11 12,14 22,4"/>
-            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 712-2h11"/>
+            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 01-2-2h11"/>
           </svg>
         </button>
       </div>
@@ -1082,13 +1082,14 @@ function handlePageChange(page) {
 
 function downloadFile(row) {
   const path = encodeURIComponent(row.path);
-  window.open(`/api/download?path=${path}`);
+  const downloadUrl = `/api/download?path=${path}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+  window.open(downloadUrl);
   notification.success('开始下载文件');
 }
 
 function copyLink(row) {
   const path = encodeURIComponent(row.path);
-  const link = `${window.location.origin}/api/download?path=${path}`;
+  const link = `${window.location.origin}/api/download?path=${path}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
   navigator.clipboard.writeText(link).then(() => {
     notification.success('链接已复制到剪贴板');
   }).catch(() => {

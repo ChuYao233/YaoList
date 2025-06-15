@@ -1,34 +1,52 @@
 # Rust
-/target
+/target/
 **/*.rs.bk
 Cargo.lock
 
-# Node.js
-node_modules/
-dist/
-package-lock.json
+# SQLx
+.sqlx/
 
 # IDE
 .idea/
 .vscode/
+*.iml
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 数据文件
+/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志文件
+*.log
+logs/
+
+# 环境变量
+.env
+.env.local
+.env.*
+
+# 临时文件
+*.tmp
+*.temp
 *.swp
-*.swo
+~*
+
+# 依赖目录
+node_modules/
+dist/
+
+# Node.js
+package-lock.json
 
 # Data
-data/
 add_settings.sql
 
 # Logs
-*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# System
-.DS_Store
-Thumbs.db

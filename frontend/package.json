@@ -9,18 +9,19 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@fortawesome/fontawesome-free": "^6.7.2",
-    "axios": "^1.9.0",
-    "dompurify": "^3.2.6",
-    "element-plus": "^2.10.1",
+    "@fortawesome/fontawesome-free": "^6.5.1",
+    "axios": "^1.6.7",
+    "dompurify": "^3.0.9",
+    "element-plus": "^2.5.6",
     "mammoth": "^1.6.0",
-    "marked": "^11.2.0",
-    "pdfjs-dist": "^3.11.174",
-    "vue": "^3.5.13",
+    "marked": "^12.0.0",
+    "pdfjs-dist": "^4.0.379",
+    "vue": "^3.4.19",
+    "vue-router": "^4.3.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.3",
-    "vite": "^6.3.5"
+    "@vitejs/plugin-vue": "^5.0.4",
+    "vite": "^5.1.4"
   }
 }

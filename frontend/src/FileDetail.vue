@@ -561,17 +561,14 @@ async function loadFileInfo() {
     loading.value = true;
     error.value = '';
     
-    // 检查下载权限
-    if (!hasPermission(PERM_DOWNLOAD)) {
-      error.value = '无下载权限';
-      return;
-    }
-    
     // 获取文件信息
     const res = await axios.get('/api/fileinfo', {
       params: { 
         path: filePath.value,
-        'x-username': user.value.username
+        'x-username': user.value.username || 'guest'  // 如果未登录则使用guest
+      },
+      headers: {
+        'x-username': user.value.username || 'guest'  // 在header中也设置用户名
       }
     });
     
@@ -579,7 +576,7 @@ async function loadFileInfo() {
     fileName.value = fileInfo.name;
     fileSize.value = fileInfo.size;
     fileModified.value = fileInfo.modified;
-    fileUrl.value = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+    fileUrl.value = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
     
     // 判断预览类型
     const type = canPreview(fileName.value);
@@ -602,7 +599,13 @@ async function loadFileInfo() {
     }
     
   } catch (err) {
+    if (err.response?.status === 401) {
+      error.value = '无权访问此文件，请先登录';
+      // 可以选择跳转到登录页面
+      // router.push('/login');
+    } else {
     error.value = err.response?.data || '加载文件失败';
+    }
   } finally {
     loading.value = false;
   }
@@ -611,7 +614,7 @@ async function loadFileInfo() {
 async function loadTextContent() {
   try {
     // 创建带认证的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) {
       throw new Error('加载文本内容失败');
@@ -655,7 +658,7 @@ async function loadTextContent() {
 async function loadM3U8Content() {
   try {
     // 创建带认证的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) {
       throw new Error('加载M3U8内容失败');
@@ -685,22 +688,22 @@ async function loadM3U8Content() {
 async function loadIframeContent() {
   try {
     const iframeConfig = JSON.parse(siteInfo.value.preview_iframe);
-    const ext = getFileExtension(fileName.value).toLowerCase();
-    
+  const ext = getFileExtension(fileName.value).toLowerCase();
+  
     // 查找匹配的配置
     for (const [types, viewers] of Object.entries(iframeConfig)) {
-      if (types.split(',').map(t => t.trim()).includes(ext)) {
+    if (types.split(',').map(t => t.trim()).includes(ext)) {
         externalViewers.value = viewers;
         if (!selectedExternalViewer.value) {
           selectedExternalViewer.value = Object.keys(viewers)[0];
         }
         const viewerUrl = viewers[selectedExternalViewer.value];
         // 创建带认证的URL
-        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
         const encodedUrl = encodeURIComponent(`${window.location.origin}${downloadUrl}`);
         iframeUrl.value = viewerUrl.replace('$e_url', encodedUrl);
-        break;
-      }
+      break;
+    }
     }
   } catch (err) {
     error.value = '加载iframe预览失败';
@@ -719,22 +722,22 @@ function switchOfficeViewer() {
 async function loadExternalContent() {
   try {
     const externalConfig = JSON.parse(siteInfo.value.preview_external);
-    const ext = getFileExtension(fileName.value).toLowerCase();
-    
+  const ext = getFileExtension(fileName.value).toLowerCase();
+  
     // 查找匹配的配置
     for (const [types, viewers] of Object.entries(externalConfig)) {
-      if (types.split(',').map(t => t.trim()).includes(ext)) {
+    if (types.split(',').map(t => t.trim()).includes(ext)) {
         externalViewers.value = viewers;
         if (!selectedExternalViewer.value) {
           selectedExternalViewer.value = Object.keys(viewers)[0];
         }
         const viewerUrl = viewers[selectedExternalViewer.value];
         // 创建带认证的URL
-        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+        const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
         const encodedUrl = encodeURIComponent(`${window.location.origin}${downloadUrl}`);
         externalViewerUrl.value = viewerUrl.replace('$e_url', encodedUrl);
-        break;
-      }
+      break;
+    }
     }
   } catch (err) {
     error.value = '加载外部预览失败';
@@ -745,7 +748,7 @@ function switchExternalViewer() {
   if (selectedExternalViewer.value && externalViewers.value[selectedExternalViewer.value]) {
     const template = externalViewers.value[selectedExternalViewer.value];
     // 创建带认证的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
     const encodedUrl = encodeURIComponent(`${window.location.origin}${downloadUrl}`);
     const rawUrl = `${window.location.origin}${downloadUrl}`;
     externalViewerUrl.value = template.replace('$e_url', encodedUrl).replace('$url', rawUrl);
@@ -849,25 +852,41 @@ function handleAudioCoverError(event) {
 async function downloadFile() {
   try {
     // 创建一个带有认证信息的URL
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
     
-    // 使用a标签下载
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = fileName.value;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // 先检查文件是否可访问
+    const checkRes = await axios.head(downloadUrl, {
+      headers: {
+        'x-username': user.value.username || 'guest'
+      }
+    });
+    
+    if (checkRes.status === 200) {
+      // 使用a标签下载
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = fileName.value;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
   } catch (err) {
-    error.value = err.response?.data || '下载文件失败';
-    notification.error('下载文件失败');
+    if (err.response?.status === 401) {
+      error.value = '无权下载此文件，请先登录';
+      notification.error('无权下载此文件，请先登录');
+      // 可以选择跳转到登录页面
+      // router.push('/login');
+    } else {
+      error.value = err.response?.data || '下载文件失败';
+      notification.error('下载文件失败');
+}
   }
 }
 
 // 复制链接
 async function copyLink() {
   try {
-    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username)}`;
+    const downloadUrl = `/api/download?path=${encodeURIComponent(filePath.value)}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
     await navigator.clipboard.writeText(`${window.location.origin}${downloadUrl}`);
     notification.success('链接已复制到剪贴板');
   } catch (err) {
