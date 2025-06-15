@@ -2147,14 +2147,8 @@ import { useRouter } from 'vue-router'
 import notification from './utils/notification.js'
 import { marked } from 'marked'
 
-let raw = localStorage.getItem('yaolist_user')
-let userObj = {}
-try {
-  userObj = JSON.parse(raw)
-} catch {
-  userObj = { username: raw }
-}
-const user = ref(userObj)
+// 用户信息将通过API获取
+const user = ref({})
 const username = computed(() => user.value.username || '管理员')
 const isAdmin = computed(() => user.value.permissions === -1)
 const isGuest = computed(() => user.value.username === 'guest')
@@ -2260,22 +2254,14 @@ function formatDate(dateString) {
 // 加载当前用户信息
 async function loadCurrentUser() {
   try {
-    const res = await axios.get('/api/user/profile', {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    const res = await axios.get('/api/user/profile')
     // 更新用户信息，保持响应式
     Object.assign(user.value, res.data)
   } catch (error) {
     console.error('加载用户信息失败:', error)
     // 如果获取失败，尝试从用户列表中找到当前用户
     try {
-      const usersRes = await axios.get('/api/admin/users', {
-        headers: {
-          'x-username': user.value.username
-        }
-      })
+      const usersRes = await axios.get('/api/admin/users')
       const currentUserData = usersRes.data.find(u => u.username === user.value.username)
       if (currentUserData) {
         Object.assign(user.value, currentUserData)
@@ -2438,11 +2424,7 @@ function setSiteSubTab(subTab) {
 // 加载站点设置
 async function loadSiteSettings() {
   try {
-    const res = await axios.get('/api/admin/site-settings', {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    const res = await axios.get('/api/admin/site-settings')
     
     // 将设置数组转换为对象
     const settingsObj = {}
@@ -2503,10 +2485,6 @@ async function saveSiteSettings() {
     
     await axios.put('/api/admin/site-settings', {
       settings: settings
-    }, {
-      headers: {
-        'x-username': user.value.username
-      }
     })
     
     notification.success('站点设置保存成功')
@@ -2550,8 +2528,21 @@ function goToHome() {
 
 // 退出登录
 function logout() {
-  localStorage.removeItem('yaolist_user')
-  router.push('/login')
+  // 调用登出API
+  axios.post('/api/logout').then(() => {
+    user.value = {}
+    notification.success('已成功登出')
+    setTimeout(() => {
+      router.push('/login')
+    }, 1000)
+  }).catch(() => {
+    // 即使API调用失败，也清除本地状态
+    user.value = {}
+    notification.success('已成功登出')
+    setTimeout(() => {
+      router.push('/login')
+    }, 1000)
+  })
 }
 
 // 修改密码
@@ -2564,10 +2555,6 @@ async function handleChangePassword() {
     const res = await axios.post('/api/user/password', {
       old_password: oldPassword.value,
       new_password: newPassword.value
-    }, {
-      headers: {
-        'x-username': user.value.username
-      }
     })
     if (res.status === 200 || res.status === 205) {
       notification.success('密码修改成功，正在跳转到登录页面...')
@@ -2576,8 +2563,10 @@ async function handleChangePassword() {
       confirmPassword.value = ''
       
       setTimeout(() => {
-        localStorage.removeItem('yaolist_user')
-        router.push('/login')
+        // 调用登出API清除Cookie
+        axios.post('/api/logout').finally(() => {
+          router.push('/login')
+        })
       }, 2000)
     }
   } catch (error) {
@@ -2612,11 +2601,7 @@ async function deleteUser(userId) {
   if (!confirm('确定要删除这个用户吗？')) return
   
   try {
-    await axios.delete(`/api/admin/users/${userId}`, {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    await axios.delete(`/api/admin/users/${userId}`)
     await loadUsers()
     notification.success('用户删除成功')
   } catch (error) {
@@ -2627,11 +2612,7 @@ async function deleteUser(userId) {
 // 创建用户
 async function createUser() {
   try {
-    await axios.post('/api/admin/users', newUser.value, {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    await axios.post('/api/admin/users', newUser.value)
     await loadUsers()
     showCreateUserDialog.value = false
     resetNewUser()
@@ -2656,11 +2637,7 @@ async function updateUser() {
       updateData.password = editingUser.value.password
     }
     
-    await axios.put(`/api/admin/users/${editingUser.value.id}`, updateData, {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    await axios.put(`/api/admin/users/${editingUser.value.id}`, updateData)
     await loadUsers()
     showEditUserDialog.value = false
     notification.success('用户更新成功')
@@ -2733,11 +2710,7 @@ function toggleEditPermission(type, checked) {
 // 加载用户列表
 async function loadUsers() {
   try {
-    const res = await axios.get('/api/admin/users', {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    const res = await axios.get('/api/admin/users')
     users.value = res.data
   } catch (error) {
     console.error('加载用户列表失败:', error)
@@ -2747,11 +2720,7 @@ async function loadUsers() {
 // 存储管理相关函数
 async function loadStorages() {
   try {
-    const res = await axios.get('/api/admin/storages', {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    const res = await axios.get('/api/admin/storages')
     storages.value = res.data
   } catch (error) {
     console.error('加载存储列表失败:', error)
@@ -2793,10 +2762,6 @@ async function toggleStorage(storage) {
     await axios.put(`/api/admin/storages/${storage.id}`, {
       ...storage,
       enabled: !storage.enabled
-    }, {
-      headers: {
-        'x-username': user.value.username
-      }
     })
     
     storage.enabled = !storage.enabled
@@ -2808,11 +2773,7 @@ async function toggleStorage(storage) {
 
 async function loadAvailableDrivers() {
   try {
-    const res = await axios.get('/api/admin/drivers', {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    const res = await axios.get('/api/admin/drivers')
     availableDrivers.value = res.data
   } catch (error) {
     console.error('加载驱动列表失败:', error)
@@ -2853,10 +2814,6 @@ async function createStorage() {
       config: newStorage.value.config,
       mount_path: newStorage.value.mount_path,
       enabled: newStorage.value.enabled
-    }, {
-      headers: {
-        'x-username': user.value.username
-      }
     })
     
     showAddDialog.value = false
@@ -2882,10 +2839,6 @@ async function updateStorage() {
       config: editingStorage.value.config,
       mount_path: editingStorage.value.mount_path,
       enabled: editingStorage.value.enabled
-    }, {
-      headers: {
-        'x-username': user.value.username
-      }
     })
     
     showEditDialog.value = false
@@ -3000,11 +2953,7 @@ async function deleteStorage(storageId) {
   if (!confirm('确定要删除这个存储吗？')) return
   
   try {
-    await axios.delete(`/api/admin/storages/${storageId}`, {
-      headers: {
-        'x-username': user.value.username
-      }
-    })
+    await axios.delete(`/api/admin/storages/${storageId}`)
     await loadStorages()
     notification.success('存储删除成功')
   } catch (error) {

@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post, put},
     Router,
 };
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock as AsyncRwLock;
 use futures::future::BoxFuture;
 use tracing_subscriber::FmtSubscriber;
-use tower_http::services::{ServeDir, ServeFile};
+
 use tower_http::trace::TraceLayer;
 use tower::ServiceBuilder;
 use rand::Rng;
@@ -24,10 +25,15 @@ use rand::Rng;
 mod drivers;
 use drivers::{Driver, FileInfo};
 
+// 嵌入前端静态资源
+#[derive(RustEmbed)]
+#[folder = "dist/"]
+struct Assets;
+
 mod auth {
     include!("src/auth.rs");
 }
-use auth::{verify_permissions, is_admin, get_current_user, UserPermissions};
+use auth::{verify_permissions, is_admin, get_current_user, UserPermissions, create_session, delete_session, delete_user_sessions, extract_session_token};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ListParams {
@@ -230,22 +236,20 @@ async fn authenticate_user(
 
 #[axum::debug_handler]
 async fn user_profile(headers: HeaderMap, Extension(pool): Extension<SqlitePool>) -> impl IntoResponse {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return (StatusCode::UNAUTHORIZED, "未登录").into_response();
-    }
-    let username = username.unwrap();
-    let user: Option<UserResponse> = sqlx::query_as::<_, UserResponse>(
-        "SELECT id, username, permissions, enabled, user_path, created_at FROM users WHERE username = ?"
-    )
-    .bind(username)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-    if let Some(user) = user {
-        (StatusCode::OK, axum::Json(user)).into_response()
-    } else {
-        (StatusCode::UNAUTHORIZED, "用户不存在").into_response()
+    // 使用Cookie认证，不要求特定权限，只要能认证即可
+    match get_current_user(&headers, &pool).await {
+        Some(user_perms) => {
+            let user = UserResponse {
+                id: 0, // 这里可以从数据库查询真实的ID
+                username: user_perms.username,
+                permissions: user_perms.permissions,
+                enabled: true, // 如果能通过认证说明用户是启用的
+                user_path: user_perms.user_path,
+                created_at: None, // 可以从数据库查询
+            };
+            (StatusCode::OK, axum::Json(user)).into_response()
+        }
+        None => (StatusCode::UNAUTHORIZED, "未登录".to_string()).into_response()
     }
 }
 
@@ -255,11 +259,12 @@ async fn change_password(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<ChangePassword>,
 ) -> impl IntoResponse {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return (StatusCode::UNAUTHORIZED, "未登录").into_response();
-    }
-    let username = username.unwrap();
+    // 使用Cookie认证获取当前用户
+    let current_user = match get_current_user(&headers, &pool).await {
+        Some(user) => user,
+        None => return (StatusCode::UNAUTHORIZED, "未登录").into_response(),
+    };
+    let username = &current_user.username;
     // 查询原密码
     let hashed_password: Option<String> = sqlx::query_scalar(
         "SELECT password FROM users WHERE username = ?"
@@ -278,6 +283,12 @@ async fn change_password(
             .bind(username)
             .execute(&pool)
             .await;
+        
+        // 清除该用户的所有session，强制重新登录
+        if let Err(e) = delete_user_sessions(username, &pool).await {
+            error!("清除用户session失败: {}", e);
+        }
+        
         // 返回特殊状态码表示需要重新登录
         (StatusCode::RESET_CONTENT, "密码修改成功，请重新登录").into_response()
     } else {
@@ -317,7 +328,6 @@ async fn main() {
 
     // 获取当前工作目录
     let current_dir = std::env::current_dir().expect("Failed to get current directory");
-    // info!("当前工作目录: {:?}", current_dir);  // 注释掉debug输出
 
     // 确保数据目录存在
     let data_dir = current_dir.join("data");
@@ -445,6 +455,46 @@ async fn main() {
         }
     }
 
+    // 创建session表
+    match sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
+            permissions INTEGER NOT NULL,
+            user_path TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        "#
+    )
+    .execute(&pool)
+    .await
+    {
+        Ok(_) => {},
+        Err(e) => {
+            error!("session表创建失败: {}", e);
+            panic!("Failed to create user_sessions table: {}", e);
+        }
+    }
+
+    // 程序启动时清除所有旧的session（使所有Cookie失效）
+    match sqlx::query("DELETE FROM user_sessions")
+        .execute(&pool)
+        .await
+    {
+        Ok(result) => {
+            let deleted_count = result.rows_affected();
+            if deleted_count > 0 {
+                println!("🔄 已清除 {} 个旧session，所有用户需要重新登录", deleted_count);
+            }
+        },
+        Err(e) => {
+            error!("清除旧session失败: {}", e);
+        }
+    }
+
     // 检查是否有用户，无则创建默认账号
     let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&pool)
@@ -515,7 +565,7 @@ async fn main() {
         ("preview_proxy_types", "m3u8", "string", "代理预览类型"),
         ("preview_proxy_ignore_headers", "authorization,referer", "string", "代理忽略头部"),
         ("preview_external", "{}", "json", "外部预览配置"),
-        ("preview_iframe", "{\"doc,docx,xls,xlsx,ppt,pptx\":{\"Microsoft\":\"https://view.officeapps.live.com/op/view.aspx?src=$e_url\",\"Google\":\"https://docs.google.com/gview?url=$e_url&embedded=true\"},\"pdf\":{\"PDF.js\":\"https://alist-org.github.io/pdf.js/web/viewer.html?file=$e_url\"},\"epub\":{\"EPUB.js\":\"https://alist-org.github.io/static/epub.js/viewer.html?url=$e_url\"}}", "json", "Iframe预览配置"),
+        ("preview_iframe", "{\"doc,docx,xls,xlsx,ppt,pptx\":{\"Microsoft\":\"https://view.officeapps.live.com/op/view.aspx?src=$e_url\",\"Google\":\"https://docs.google.com/gview?url=$e_url&embedded=true\"},\"pdf\":{\"Microsoft\":\"https://view.officeapps.live.com/op/view.aspx?src=$e_url\",\"Google\":\"https://docs.google.com/gview?url=$e_url&embedded=true\"},\"epub\":{\"EPUB.js\":\"https://alist-org.github.io/static/epub.js/viewer.html?url=$e_url\"}}", "json", "Iframe预览配置"),
         ("preview_audio_cover", "https://api.ylist.org/logo/logo.svg", "string", "音频封面"),
         ("preview_auto_play_audio", "false", "boolean", "自动播放音频"),
         ("preview_auto_play_video", "false", "boolean", "自动播放视频"),
@@ -562,17 +612,31 @@ async fn main() {
 
     // 配置CORS
     let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+        .allow_origin("http://127.0.0.1:3000".parse::<axum::http::HeaderValue>().unwrap())
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::HEAD,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+            axum::http::header::COOKIE,
+        ])
+        .allow_credentials(true);
 
     let app = Router::new()
         .route("/api/files", get(list_files))
         .route("/api/fileinfo", get(file_info))
         .route("/api/download", get(download_file))
-        .route("/api/upload", post(upload_file).layer(DefaultBodyLimit::max(1024 * 1024 * 1024))) // 1GB limit
+        .route("/api/upload", post(upload_file).layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))) // 2GB limit
         .route("/api/register", post(register_user))
         .route("/api/login", post(login_user))
+        .route("/api/logout", post(logout_user))
         .route("/api/guest-login", get(guest_login))
         .route("/api/delete", post(delete_file))
         .route("/api/rename", post(rename_file))
@@ -590,16 +654,9 @@ async fn main() {
         .route("/api/transfer", post(transfer_file))
         // 驱动路由
         .merge(drivers::get_all_routes())
-        // 静态资源服务，放最后，支持前端 history 刷新
-        .nest_service("/", {
-            let dist_path = std::env::current_dir().unwrap().join("dist");
-            println!("📂 静态文件目录: {}", dist_path.display());
-            if !dist_path.exists() {
-                println!("❌ 静态文件目录不存在！");
-            }
-            ServeDir::new(dist_path.clone())
-                .not_found_service(ServeFile::new(dist_path.join("index.html")))
-                .with_buf_chunk_size(8192)
+        // 静态资源服务，使用嵌入的资源
+        .fallback(|uri: axum::http::Uri| async move {
+            handle_embedded_file(uri).await.unwrap()
         })
         .layer(
             ServiceBuilder::new()
@@ -655,19 +712,61 @@ async fn list_files(
     // 验证用户权限
     let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
     
-    let request_path = if params.path.trim().is_empty() || params.path == "/" {
-        "/".to_string()
+    // 处理用户路径限制
+    let user_base_path = if user_perms.user_path == "/" {
+        "".to_string()
     } else {
-        params.path.clone()
+        user_perms.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let request_path = if params.path.trim().is_empty() || params.path == "/" {
+        if user_base_path.is_empty() {
+            "/".to_string()
+        } else {
+            user_base_path.clone()
+        }
+    } else {
+        // 将用户请求的相对路径转换为实际路径
+        if user_base_path.is_empty() {
+            params.path.clone()
+        } else {
+            format!("{}{}", user_base_path, params.path)
+        }
     };
 
-    // 如果是根路径，返回所有一级目录
+    // 如果是根路径，返回所有一级目录和根存储的文件
     if request_path == "/" {
         let cache = STORAGE_CACHE.read().await;
         let mut files = Vec::new();
         let mut seen_paths = std::collections::HashSet::new();
         
-        // 收集所有一级目录
+        // 首先检查是否有挂载在根目录的存储
+        let mut root_storage: Option<&Storage> = None;
+        for storage in cache.values() {
+            if !storage.enabled {
+                continue;
+            }
+            
+            let mount_path = storage.mount_path.trim_matches('/');
+            if mount_path.is_empty() {
+                root_storage = Some(storage);
+                break;
+            }
+        }
+        
+        // 如果有根存储，显示其文件内容
+        if let Some(storage) = root_storage {
+                            if let Some(driver) = create_driver_from_storage(storage) {
+                    if let Ok(mut storage_files) = driver.list("/").await {
+                        for file in &mut storage_files {
+                            file.path = format!("/{}", file.name);
+                        }
+                        files.extend(storage_files);
+                    }
+                }
+        }
+        
+        // 然后收集所有一级目录（非根存储）
         for storage in cache.values() {
             // 只显示启用的存储
             if !storage.enabled {
@@ -675,8 +774,8 @@ async fn list_files(
             }
             
             let mount_path = storage.mount_path.trim_matches('/');
-            if mount_path.is_empty() || mount_path == "/" {
-                continue;
+            if mount_path.is_empty() {
+                continue; // 跳过根存储，已经处理过了
             }
             
             // 获取第一级目录
@@ -702,26 +801,51 @@ async fn list_files(
     let mut files = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
-    // 如果是访问第一级目录（如 /ftp）
+    // 如果是访问第一级目录（如 /df1）
     if path_segments.len() == 1 {
+        let mut has_exact_match = false;
+        let mut has_subdirs = false;
+        
         // 查找所有以此目录开头的存储
         for storage in cache.values() {
+            if !storage.enabled {
+                continue;
+            }
+            
             let mount_path = storage.mount_path.trim_matches('/');
             let mount_segments: Vec<&str> = mount_path.split('/').collect();
             
-            // 如果存储路径以当前目录开头
-            if mount_segments.first() == Some(&first_segment) {
-                if mount_segments.len() > 1 {
-                    // 添加下一级目录
-                    let second_segment = mount_segments[1];
-                    if seen_paths.insert(second_segment.to_string()) {
-                        files.push(FileInfo {
-                            name: second_segment.to_string(),
-                            path: format!("/{}/{}", first_segment, second_segment),
-                            size: 0,
-                            is_dir: true,
-                            modified: storage.created_at.clone(),
-                        });
+            // 检查是否有完全匹配的存储（如 /df1）
+            if mount_path == first_segment {
+                has_exact_match = true;
+            }
+            
+            // 如果存储路径以当前目录开头且有子路径
+            if mount_segments.first() == Some(&first_segment) && mount_segments.len() > 1 {
+                has_subdirs = true;
+                // 添加下一级目录
+                let second_segment = mount_segments[1];
+                if seen_paths.insert(second_segment.to_string()) {
+                    files.push(FileInfo {
+                        name: second_segment.to_string(),
+                        path: format!("/{}/{}", first_segment, second_segment),
+                        size: 0,
+                        is_dir: true,
+                        modified: storage.created_at.clone(),
+                    });
+                }
+            }
+        }
+
+        // 如果有完全匹配的存储，显示其内容
+        if has_exact_match {
+            if let Some(storage) = cache.values().find(|s| s.enabled && s.mount_path.trim_matches('/') == first_segment) {
+                if let Some(driver) = create_driver_from_storage(storage) {
+                    if let Ok(mut storage_files) = driver.list("/").await {
+                        for file in &mut storage_files {
+                            file.path = format!("/{}/{}", first_segment, file.name);
+                        }
+                        files.extend(storage_files);
                     }
                 }
             }
@@ -756,7 +880,18 @@ async fn file_info(
     // 验证用户权限
     let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
     
-    let path = &params.path;
+    // 处理用户路径限制
+    let user_base_path = if user_perms.user_path == "/" {
+        "".to_string()
+    } else {
+        user_perms.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let path = if user_base_path.is_empty() {
+        params.path.clone()
+    } else {
+        format!("{}{}", user_base_path, params.path)
+    };
     
     // 检查用户权限
     let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
@@ -774,7 +909,7 @@ async fn file_info(
     }
     
     // 查找对应的存储
-    let storage = match find_storage_for_path(path).await {
+    let storage = match find_storage_for_path(&path).await {
         Some(storage) => storage,
         None => return Err((StatusCode::NOT_FOUND, "未找到对应的存储".to_string())),
     };
@@ -844,9 +979,7 @@ async fn register_user(
 async fn login_user(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<UserLogin>,
-) -> Result<Json<UserResponse>, (StatusCode, String)> {
-    // info!("尝试登录用户: {}", payload.username);  // 注释掉debug输出
-    
+) -> impl IntoResponse {
     let result = sqlx::query_as::<_, UserResponse>(
         r#"
         SELECT id, username, permissions, enabled, user_path, created_at FROM users WHERE username = ?
@@ -858,16 +991,21 @@ async fn login_user(
     .map_err(|e| {
         error!("数据库查询失败: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误".to_string())
-    })?;
+    });
+
+    let result = match result {
+        Ok(result) => result,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
 
     match result {
         Some(user_data) => {
             // 检查用户是否启用
             if !user_data.enabled {
-                return Err((StatusCode::FORBIDDEN, "账号已被禁用".to_string()));
+                return (StatusCode::FORBIDDEN, "账号已被禁用".to_string()).into_response();
             }
 
-            let hashed_password: String = sqlx::query_scalar(
+            let hashed_password: String = match sqlx::query_scalar(
                 r#"
                 SELECT password FROM users WHERE username = ?
                 "#,
@@ -875,31 +1013,82 @@ async fn login_user(
             .bind(&payload.username)
             .fetch_one(&pool)
             .await
-            .map_err(|e| {
-                error!("获取密码失败: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误".to_string())
-            })?;
+            {
+                Ok(password) => password,
+                Err(e) => {
+                    error!("获取密码失败: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误".to_string()).into_response();
+                }
+            };
 
             // 特殊处理游客账号（无密码）
-            if payload.username == "guest" && hashed_password.is_empty() {
-                // info!("游客登录成功");  // 注释掉debug输出
-                Ok(Json(user_data))
-            } else if verify(&payload.password, &hashed_password).map_err(|e| {
-                error!("密码验证失败: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "密码验证错误".to_string())
-            })? {
-                // info!("用户登录成功: {}", payload.username);  // 注释掉debug输出
-                Ok(Json(user_data))
+            let password_valid = if payload.username == "guest" && hashed_password.is_empty() {
+                true
             } else {
-                // info!("密码错误: {}", payload.username);  // 注释掉debug输出
-                Err((StatusCode::UNAUTHORIZED, "用户不存在或密码错误".to_string()))
+                match verify(&payload.password, &hashed_password) {
+                    Ok(valid) => valid,
+                    Err(e) => {
+                        error!("密码验证失败: {}", e);
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "密码验证错误".to_string()).into_response();
+                    }
+                }
+            };
+
+            if password_valid {
+                // 创建session
+                match create_session(&payload.username, &pool).await {
+                    Ok(token) => {
+                        // 设置Cookie
+                        let cookie_value = format!(
+                            "session_token={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+                            token,
+                            7 * 24 * 60 * 60 // 7天
+                        );
+                        
+                        let mut response = axum::Json(user_data).into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::SET_COOKIE,
+                            cookie_value.parse().unwrap()
+                        );
+                        
+                        response
+                    }
+                    Err(e) => {
+                        error!("创建session失败: {}", e);
+                        (StatusCode::INTERNAL_SERVER_ERROR, "登录失败".to_string()).into_response()
+                    }
+                }
+            } else {
+                (StatusCode::UNAUTHORIZED, "用户不存在或密码错误".to_string()).into_response()
             }
         }
         None => {
-            // info!("用户不存在: {}", payload.username);  // 注释掉debug输出
-            Err((StatusCode::UNAUTHORIZED, "用户不存在或密码错误".to_string()))
+            (StatusCode::UNAUTHORIZED, "用户不存在或密码错误".to_string()).into_response()
         }
     }
+}
+
+// 添加登出接口
+#[axum::debug_handler]
+async fn logout_user(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+) -> impl IntoResponse {
+    if let Some(token) = extract_session_token(&headers) {
+        if let Err(e) = delete_session(&token, &pool).await {
+            error!("删除session失败: {}", e);
+        }
+    }
+    
+    // 清除Cookie
+    let cookie_value = "session_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    let mut response = "登出成功".into_response();
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        cookie_value.parse().unwrap()
+    );
+    
+    response
 }
 
 // 上传文件接口
@@ -915,44 +1104,7 @@ async fn upload_file(
     };
     
     println!("开始处理上传请求");
-    
-    // 认证检查
-    let username = if let Some(username) = headers.get("x-username").and_then(|v| v.to_str().ok()) {
-        // 用户已登录，直接使用用户名
-        username.to_string()
-    } else {
-        // 用户未登录，尝试使用游客账号
-        let guest_user: Option<(String, bool)> = sqlx::query_as("SELECT username, enabled FROM users WHERE username = 'guest'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
-        
-        if let Some((guest_username, enabled)) = guest_user {
-            if enabled {
-                guest_username
-            } else {
-                return (StatusCode::UNAUTHORIZED, "未登录，请登录后访问").into_response();
-            }
-        } else {
-            return (StatusCode::UNAUTHORIZED, "未登录").into_response();
-        }
-    };
-    println!("上传用户: {}", username);
-    
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-    if let Some((_id, permissions)) = user {
-        if permissions & PERM_UPLOAD == 0 {
-            println!("上传失败: 无上传权限");
-            return (StatusCode::FORBIDDEN, "无上传权限").into_response();
-        }
-    } else {
-        println!("上传失败: 用户不存在");
-        return (StatusCode::UNAUTHORIZED, "用户不存在").into_response();
-    }
+    println!("上传用户: {}", user_perms.username);
 
     let mut upload_path = String::new();
     let mut relative_file_path = String::new();
@@ -966,9 +1118,9 @@ async fn upload_file(
                 println!("处理字段: {}", name);
                 
                 if name == "path" {
-                    upload_path = match field.text().await {
+                    let request_path = match field.text().await {
                         Ok(path) => {
-                            println!("上传路径: {}", path);
+                            println!("请求上传路径: {}", path);
                             path
                         },
                         Err(e) => {
@@ -976,6 +1128,20 @@ async fn upload_file(
                             String::new()
                         },
                     };
+                    
+                    // 处理用户路径限制
+                    let user_base_path = if user_perms.user_path == "/" {
+                        "".to_string()
+                    } else {
+                        user_perms.user_path.trim_end_matches('/').to_string()
+                    };
+                    
+                    upload_path = if user_base_path.is_empty() {
+                        request_path
+                    } else {
+                        format!("{}{}", user_base_path, request_path)
+                    };
+                    println!("实际上传路径: {}", upload_path);
                 } else if name == "relative_path" {
                     relative_file_path = match field.text().await {
                         Ok(path) => {
@@ -991,17 +1157,25 @@ async fn upload_file(
                     let filename = field.file_name().unwrap_or("unknown").to_string();
                     println!("上传文件名: {}", filename);
                     
-                    let data = match field.bytes().await {
+                    // 直接使用bytes()方法，但增加错误处理
+                    match field.bytes().await {
                         Ok(bytes) => {
                             println!("文件大小: {} bytes", bytes.len());
-                            bytes.to_vec()
+                            file_data = Some((filename, bytes.to_vec()));
                         },
                         Err(e) => {
                             println!("读取文件数据失败: {}", e);
-                            return (StatusCode::BAD_REQUEST, format!("读取文件数据失败: {}", e)).into_response();
+                            // 提供更详细的错误信息
+                            let error_msg = if e.to_string().contains("body read error") {
+                                "文件上传中断，请检查网络连接或文件大小"
+                            } else if e.to_string().contains("multipart") {
+                                "multipart数据格式错误，请重试"
+                            } else {
+                                "读取文件数据失败"
+                            };
+                            return (StatusCode::BAD_REQUEST, format!("{}: {}", error_msg, e)).into_response();
                         }
                     };
-                    file_data = Some((filename, data));
                 }
             },
             Ok(None) => {
@@ -1144,28 +1318,21 @@ async fn delete_file(
     // 验证用户权限
     let user_perms = verify_permissions(&headers, &pool, PERM_DELETE).await?;
     
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions & PERM_DELETE == 0 {
-            return Err((StatusCode::FORBIDDEN, "无删除权限".to_string()));
-        }
+    // 处理用户路径限制
+    let user_base_path = if user_perms.user_path == "/" {
+        "".to_string()
     } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
-    }
+        user_perms.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let actual_path = if user_base_path.is_empty() {
+        payload.path.clone()
+    } else {
+        format!("{}{}", user_base_path, payload.path)
+    };
 
     // 查找对应的存储
-    let storage = find_storage_for_path(&payload.path).await
+    let storage = find_storage_for_path(&actual_path).await
         .ok_or((StatusCode::NOT_FOUND, "未找到对应的存储".to_string()))?;
 
     let driver = create_driver_from_storage(&storage)
@@ -1173,9 +1340,9 @@ async fn delete_file(
 
     // 计算相对于存储根目录的路径
     let relative_path = if storage.mount_path == "/" {
-        payload.path.trim_start_matches('/').to_string()
+        actual_path.trim_start_matches('/').to_string()
     } else {
-        payload.path.strip_prefix(&storage.mount_path)
+        actual_path.strip_prefix(&storage.mount_path)
             .unwrap_or("")
             .trim_start_matches('/')
             .to_string()
@@ -1204,28 +1371,27 @@ async fn rename_file(
     // 验证用户权限
     let user_perms = verify_permissions(&headers, &pool, PERM_RENAME).await?;
     
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions & PERM_RENAME == 0 {
-            return Err((StatusCode::FORBIDDEN, "无重命名权限".to_string()));
-        }
+    // 处理用户路径限制
+    let user_base_path = if user_perms.user_path == "/" {
+        "".to_string()
     } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
-    }
+        user_perms.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let actual_old_path = if user_base_path.is_empty() {
+        payload.old_path.clone()
+    } else {
+        format!("{}{}", user_base_path, payload.old_path)
+    };
+    
+    let _actual_new_path = if user_base_path.is_empty() {
+        payload.new_path.clone()
+    } else {
+        format!("{}{}", user_base_path, payload.new_path)
+    };
 
     // 查找对应的存储
-    let storage = find_storage_for_path(&payload.old_path).await
+    let storage = find_storage_for_path(&actual_old_path).await
         .ok_or((StatusCode::NOT_FOUND, "未找到对应的存储".to_string()))?;
 
     let driver = create_driver_from_storage(&storage)
@@ -1279,28 +1445,21 @@ async fn create_folder(
     // 验证用户权限
     let user_perms = verify_permissions(&headers, &pool, PERM_UPLOAD).await?;
     
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions & PERM_UPLOAD == 0 {
-            return Err((StatusCode::FORBIDDEN, "无创建文件夹权限".to_string()));
-        }
+    // 处理用户路径限制
+    let user_base_path = if user_perms.user_path == "/" {
+        "".to_string()
     } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
-    }
+        user_perms.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let actual_parent_path = if user_base_path.is_empty() {
+        payload.parent_path.clone()
+    } else {
+        format!("{}{}", user_base_path, payload.parent_path)
+    };
 
     // 查找对应的存储
-    let storage = find_storage_for_path(&payload.parent_path).await
+    let storage = find_storage_for_path(&actual_parent_path).await
         .ok_or((StatusCode::NOT_FOUND, "未找到对应的存储".to_string()))?;
 
     let driver = create_driver_from_storage(&storage)
@@ -1364,12 +1523,6 @@ async fn create_storage(
     if !is_admin(&headers, &pool).await {
         return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
-    
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
 
     // 创建存储
     let config_json = serde_json::to_string(&payload.config)
@@ -1410,25 +1563,9 @@ async fn update_storage(
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(payload): Json<UpdateStorage>,
 ) -> Result<Json<Storage>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 获取当前存储信息
@@ -1491,25 +1628,9 @@ async fn delete_storage(
     Extension(pool): Extension<SqlitePool>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<()>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 删除存储
@@ -1533,25 +1654,9 @@ async fn get_available_drivers_api(
     headers: HeaderMap,
     Extension(pool): Extension<SqlitePool>,
 ) -> Result<Json<Vec<drivers::DriverInfo>>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     Ok(Json(drivers::get_available_drivers()))
@@ -1642,17 +1747,25 @@ async fn download_file(
     headers: HeaderMap,
     Extension(pool): Extension<SqlitePool>,
 ) -> impl IntoResponse {
-    let path = params.get("path").cloned().unwrap_or_else(|| "".to_string());
-    let username = params.get("x-username").cloned().unwrap_or_else(|| "guest".to_string());
+    let request_path = params.get("path").cloned().unwrap_or_else(|| "".to_string());
     
-    // 构建新的请求头，包含用户名
-    let mut auth_headers = headers.clone();
-    auth_headers.insert("x-username", username.parse().unwrap());
-    
-    // 验证用户权限
-    match verify_permissions(&auth_headers, &pool, PERM_DOWNLOAD).await {
-        Ok(_) => (),
+    // 验证用户权限（不再从URL参数获取用户名）
+    let user_perms = match verify_permissions(&headers, &pool, PERM_DOWNLOAD).await {
+        Ok(perms) => perms,
         Err((status, message)) => return (status, message).into_response(),
+    };
+    
+    // 处理用户路径限制
+    let user_base_path = if user_perms.user_path == "/" {
+        "".to_string()
+    } else {
+        user_perms.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let path = if user_base_path.is_empty() {
+        request_path
+    } else {
+        format!("{}{}", user_base_path, request_path)
     };
     
     // 查找对应的存储
@@ -1841,25 +1954,9 @@ async fn get_site_settings(
     headers: HeaderMap,
     Extension(pool): Extension<SqlitePool>,
 ) -> Result<Json<Vec<SiteSetting>>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     let settings: Vec<SiteSetting> = sqlx::query_as::<_, SiteSetting>(
@@ -1879,25 +1976,9 @@ async fn update_site_setting(
     axum::extract::Path(key): axum::extract::Path<String>,
     Json(payload): Json<UpdateSiteSetting>,
 ) -> Result<Json<SiteSetting>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 更新设置
@@ -1928,25 +2009,9 @@ async fn batch_update_site_settings(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<BatchUpdateSiteSettings>,
 ) -> Result<Json<Vec<SiteSetting>>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 批量更新设置
@@ -2010,25 +2075,9 @@ async fn list_users(
     headers: HeaderMap,
     Extension(pool): Extension<SqlitePool>,
 ) -> Result<Json<Vec<UserResponse>>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     let users: Vec<UserResponse> = sqlx::query_as::<_, UserResponse>(
@@ -2047,30 +2096,14 @@ async fn create_user_admin(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<CreateUser>,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
-    // 检查用户路径
-    if payload.user_path != "/" {
-        return Err((StatusCode::NOT_IMPLEMENTED, "用户路径设置功能正在开发中，目前仅支持根路径 '/'".to_string()));
+    // 验证用户路径格式
+    if !payload.user_path.starts_with('/') {
+        return Err((StatusCode::BAD_REQUEST, "用户路径必须以 '/' 开头".to_string()));
     }
 
     // 创建用户
@@ -2082,7 +2115,7 @@ async fn create_user_admin(
     .bind(&hashed_password)
     .bind(payload.permissions)
     .bind(payload.enabled)
-    .bind("/") // 强制使用根路径
+    .bind(&payload.user_path)
     .execute(&pool)
     .await
     .map_err(|e| (StatusCode::BAD_REQUEST, format!("创建用户失败: {}", e)))?;
@@ -2105,40 +2138,22 @@ async fn update_user_admin(
     axum::extract::Path(user_id): axum::extract::Path<i64>,
     Json(payload): Json<UpdateUser>,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 获取当前用户信息
-    let current_user: Option<(String,)> = sqlx::query_as("SELECT user_path FROM users WHERE id = ?")
+    let _current_user: Option<(String,)> = sqlx::query_as("SELECT user_path FROM users WHERE id = ?")
         .bind(user_id)
         .fetch_optional(&pool)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // 如果用户路径发生变化，返回功能开发中的提示
+    // 验证用户路径格式
     if let Some(new_user_path) = &payload.user_path {
-        if let Some((current_path,)) = current_user {
-            if new_user_path != &current_path {
-                return Err((StatusCode::NOT_IMPLEMENTED, "用户路径设置功能正在开发中".to_string()));
-            }
+        if !new_user_path.starts_with('/') {
+            return Err((StatusCode::BAD_REQUEST, "用户路径必须以 '/' 开头".to_string()));
         }
     }
 
@@ -2186,6 +2201,16 @@ async fn update_user_admin(
         updated = true;
     }
 
+    if let Some(new_user_path) = &payload.user_path {
+        sqlx::query("UPDATE users SET user_path = ? WHERE id = ?")
+            .bind(new_user_path)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        updated = true;
+    }
+
     if !updated {
         return Err((StatusCode::BAD_REQUEST, "没有要更新的字段".to_string()));
     }
@@ -2198,6 +2223,11 @@ async fn update_user_admin(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // 清除该用户的所有session，强制重新登录
+    if let Err(e) = delete_user_sessions(&updated_user.username, &pool).await {
+        error!("清除用户session失败: {}", e);
+    }
+
     Ok(Json(updated_user))
 }
 
@@ -2207,37 +2237,23 @@ async fn delete_user_admin(
     Extension(pool): Extension<SqlitePool>,
     axum::extract::Path(user_id): axum::extract::Path<i64>,
 ) -> Result<Json<()>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok());
-    if username.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "未登录".to_string()));
-    }
-    let username = username.unwrap();
-
-    // 检查是否为管理员
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
-
-    if let Some((_id, permissions)) = user {
-        if permissions != 0xFFFF_FFFFu32 as i32 {
-            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
-        }
-    } else {
-        return Err((StatusCode::UNAUTHORIZED, "用户不存在".to_string()));
+    // 验证是否为管理员
+    if !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
-    // 检查是否尝试删除自己
-    let current_user: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+    // 获取当前用户信息以检查是否尝试删除自己
+    if let Some(current_user) = get_current_user(&headers, &pool).await {
+        let current_user_info: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+            .bind(&current_user.username)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
 
-    if let Some((current_user_id,)) = current_user {
-        if current_user_id == user_id {
-            return Err((StatusCode::BAD_REQUEST, "不能删除自己的账号".to_string()));
+        if let Some((current_user_id,)) = current_user_info {
+            if current_user_id == user_id {
+                return Err((StatusCode::BAD_REQUEST, "不能删除自己的账号".to_string()));
+            }
         }
     }
 
@@ -2310,7 +2326,7 @@ async fn get_public_site_info(
         preview_proxy_types: "m3u8".to_string(),
         preview_proxy_ignore_headers: "authorization,referer".to_string(),
         preview_external: "{}".to_string(),
-        preview_iframe: "{\"doc,docx,xls,xlsx,ppt,pptx\":{\"Microsoft\":\"https://view.officeapps.live.com/op/view.aspx?src=$e_url\",\"Google\":\"https://docs.google.com/gview?url=$e_url&embedded=true\"},\"pdf\":{\"PDF.js\":\"https://alist-org.github.io/pdf.js/web/viewer.html?file=$e_url\"},\"epub\":{\"EPUB.js\":\"https://alist-org.github.io/static/epub.js/viewer.html?url=$e_url\"}}".to_string(),
+        preview_iframe: "{\"doc,docx,xls,xlsx,ppt,pptx\":{\"Microsoft\":\"https://view.officeapps.live.com/op/view.aspx?src=$e_url\",\"Google\":\"https://docs.google.com/gview?url=$e_url&embedded=true\"},\"pdf\":{\"Microsoft\":\"https://view.officeapps.live.com/op/view.aspx?src=$e_url\",\"Google\":\"https://docs.google.com/gview?url=$e_url&embedded=true\"},\"epub\":{\"EPUB.js\":\"https://alist-org.github.io/static/epub.js/viewer.html?url=$e_url\"}}".to_string(),
         preview_audio_cover: "https://api.ylist.org/logo/logo.svg".to_string(),
         preview_auto_play_audio: false,
         preview_auto_play_video: false,
@@ -2447,35 +2463,50 @@ async fn transfer_file(
     Extension(pool): Extension<SqlitePool>,
     Json(payload): Json<TransferParams>,
 ) -> Result<Json<()>, (StatusCode, String)> {
-    let username = headers.get("x-username").and_then(|v| v.to_str().ok())
-        .ok_or((StatusCode::UNAUTHORIZED, "未登录".to_string()))?;
+    // 验证用户权限
+    let current_user = match get_current_user(&headers, &pool).await {
+        Some(user) => user,
+        None => return Err((StatusCode::UNAUTHORIZED, "未登录".to_string())),
+    };
 
     // 权限检查
-    let user: Option<(i64, i32)> = sqlx::query_as("SELECT id, permissions FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(&pool)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("数据库错误: {}", e)))?;
-
-    let permissions = user.map(|(_, p)| p).unwrap_or(0);
     match payload.action.as_str() {
-        "copy" if permissions & PERM_COPY == 0 => {
+        "copy" if current_user.permissions & PERM_COPY == 0 => {
             return Err((StatusCode::FORBIDDEN, "无复制权限".to_string()));
         },
-        "move" if permissions & PERM_MOVE == 0 => {
+        "move" if current_user.permissions & PERM_MOVE == 0 => {
             return Err((StatusCode::FORBIDDEN, "无移动权限".to_string()));
         },
         _ => {}
     }
 
-    if payload.src_path == payload.dst_path {
+    // 处理用户路径限制
+    let user_base_path = if current_user.user_path == "/" {
+        "".to_string()
+    } else {
+        current_user.user_path.trim_end_matches('/').to_string()
+    };
+    
+    let actual_src_path = if user_base_path.is_empty() {
+        payload.src_path.clone()
+    } else {
+        format!("{}{}", user_base_path, payload.src_path)
+    };
+    
+    let actual_dst_path = if user_base_path.is_empty() {
+        payload.dst_path.clone()
+    } else {
+        format!("{}{}", user_base_path, payload.dst_path)
+    };
+
+    if actual_src_path == actual_dst_path {
         return Err((StatusCode::BAD_REQUEST, "源路径与目标路径相同".to_string()));
     }
 
     // 获取源和目标存储
-    let src_storage = find_storage_for_path(&payload.src_path).await
+    let src_storage = find_storage_for_path(&actual_src_path).await
         .ok_or((StatusCode::NOT_FOUND, "未找到源存储".to_string()))?;
-    let dst_storage = find_storage_for_path(&payload.dst_path).await
+    let dst_storage = find_storage_for_path(&actual_dst_path).await
         .ok_or((StatusCode::NOT_FOUND, "未找到目标存储".to_string()))?;
 
     let src_driver = create_driver_from_storage(&src_storage)
@@ -2484,8 +2515,8 @@ async fn transfer_file(
         .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "无法创建目标存储驱动".to_string()))?;
 
     // 获取相对路径
-    let src_rel = get_relative_path(&payload.src_path, &src_storage.mount_path);
-    let dst_rel = get_relative_path(&payload.dst_path, &dst_storage.mount_path);
+    let src_rel = get_relative_path(&actual_src_path, &src_storage.mount_path);
+    let dst_rel = get_relative_path(&actual_dst_path, &dst_storage.mount_path);
 
     // 获取源文件信息
     let src_info = src_driver.get_file_info(&src_rel).await
@@ -2605,4 +2636,55 @@ fn get_path_components(path: &str) -> (String, String) {
     let parent_dir = if parent_dir.is_empty() { "/" } else { parent_dir.as_ref() };
     
     (filename, parent_dir.to_string())
+}
+
+// 处理嵌入的静态资源
+async fn handle_embedded_file(
+    uri: axum::http::Uri,
+) -> Result<axum::response::Response, std::convert::Infallible> {
+    let path = uri.path().trim_start_matches('/');
+    
+    // 如果是根路径，返回 index.html
+    let file_path = if path.is_empty() || path == "/" {
+        "index.html"
+    } else {
+        path
+    };
+    
+    match Assets::get(file_path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(file_path).first_or_octet_stream();
+            let mut response = content.data.into_response();
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                mime.as_ref().parse().unwrap()
+            );
+            Ok(response)
+        }
+        None => {
+            // 如果文件不存在且不是API路径，返回 index.html（SPA fallback）
+            if !path.starts_with("api/") {
+                match Assets::get("index.html") {
+                    Some(content) => {
+                        let mut response = content.data.into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/html; charset=utf-8".parse().unwrap()
+                        );
+                        Ok(response)
+                    }
+                    None => Ok((StatusCode::NOT_FOUND, "Frontend not found").into_response()),
+                }
+            } else {
+                Ok((StatusCode::NOT_FOUND, "Not Found").into_response())
+            }
+        }
+    }
+}
+
+// 处理SPA fallback的函数（保留作为备用）
+async fn handle_spa_fallback(
+    request: axum::http::Request<axum::body::Body>,
+) -> Result<axum::response::Response, std::convert::Infallible> {
+    handle_embedded_file(request.uri().clone()).await
 }

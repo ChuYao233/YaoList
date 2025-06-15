@@ -9,6 +9,19 @@ import Register from './components/Register.vue'
 import FileDetail from './FileDetail.vue'
 import AdminPanel from './AdminPanel.vue'
 import { createRouter, createWebHistory } from 'vue-router'
+import axios from 'axios'
+
+// 配置axios默认设置
+axios.defaults.baseURL = ''
+
+// 添加请求拦截器，只对本站API使用credentials
+axios.interceptors.request.use(config => {
+  // 只对本站的API请求使用credentials
+  if (config.url && (config.url.startsWith('/api/') || config.url.startsWith('http://127.0.0.1:3000/api/'))) {
+    config.withCredentials = true
+  }
+  return config
+})
 
 const routes = [
   { 
@@ -36,17 +49,26 @@ const router = createRouter({
 })
 
 // 添加导航守卫
-router.beforeEach((to, from, next) => {
-  const isAuthenticated = !!localStorage.getItem('yaolist_user')
-  
-  if (to.meta.requiresAuth && !isAuthenticated) {
-    // 如果需要认证但用户未登录，重定向到登录页
-    next('/login')
-  } else if (to.path === '/login' && isAuthenticated) {
-    // 如果用户已登录但访问登录页，重定向到主页
-    next('/')
-  } else {
+router.beforeEach(async (to, from, next) => {
+  // 对于不需要认证的页面，直接通过
+  if (!to.meta.requiresAuth) {
     next()
+    return
+  }
+  
+  // 对于需要认证的页面，检查用户是否已登录
+  try {
+    const res = await axios.get('/api/user/profile')
+    if (res.status === 200 && res.data.username) {
+      // 用户已登录
+      next()
+    } else {
+      // 用户未登录，重定向到登录页
+      next('/login')
+    }
+  } catch (error) {
+    // 认证失败，重定向到登录页
+    next('/login')
   }
 })
 

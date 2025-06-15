@@ -768,11 +768,7 @@ const siteInfo = ref({
 
 
 
-try {
-  user.value = JSON.parse(localStorage.getItem('yaolist_user') || '{}')
-} catch {
-  user.value = {}
-}
+
 
 // 权限常量
 const PERM_UPLOAD = 1 << 0; // 1 创建目录或上传
@@ -972,8 +968,63 @@ function getFileIcon(fileName, isDir) {
   };
 }
 
+// 辅助函数：将实际路径转换为显示路径
+function actualPathToDisplayPath(actualPath) {
+  console.log('actualPathToDisplayPath - 输入:', actualPath);
+  console.log('actualPathToDisplayPath - 用户路径:', user.value.user_path);
+  
+  if (!user.value.user_path || user.value.user_path === '/') {
+    console.log('actualPathToDisplayPath - 无用户路径限制，返回原路径');
+    return actualPath;
+  }
+  
+  const userBasePath = user.value.user_path.replace(/\/+$/, '');
+  console.log('actualPathToDisplayPath - 用户基础路径:', userBasePath);
+  
+  // 处理重复的用户路径前缀（如 /Onedrive/Onedrive/Desktop）
+  let cleanPath = actualPath;
+  
+  // 如果路径以用户路径开头，移除第一个用户路径前缀
+  if (cleanPath.startsWith(userBasePath)) {
+    cleanPath = cleanPath.substring(userBasePath.length);
+    if (!cleanPath.startsWith('/')) {
+      cleanPath = '/' + cleanPath;
+    }
+    console.log('actualPathToDisplayPath - 第一次移除后:', cleanPath);
+  }
+  
+  // 如果还是以用户路径开头（说明有重复），再次移除
+  if (cleanPath.startsWith(userBasePath)) {
+    cleanPath = cleanPath.substring(userBasePath.length);
+    if (!cleanPath.startsWith('/')) {
+      cleanPath = '/' + cleanPath;
+    }
+    console.log('actualPathToDisplayPath - 第二次移除后:', cleanPath);
+  }
+  
+  console.log('actualPathToDisplayPath - 最终结果:', cleanPath);
+  return cleanPath;
+}
+
+// 辅助函数：将显示路径转换为实际路径
+function displayPathToActualPath(displayPath) {
+  if (!user.value.user_path || user.value.user_path === '/') {
+    return displayPath;
+  }
+  
+  const userBasePath = user.value.user_path.replace(/\/+$/, '');
+  if (displayPath === '/') {
+    return userBasePath;
+  } else {
+    return userBasePath + displayPath;
+  }
+}
+
 const pathBreadcrumbs = computed(() => {
-  const parts = currentPath.value.replace(/\\/g, '/').split('/').filter(Boolean);
+  // 面包屑应该基于当前的URL路径（用户看到的路径）
+  let displayPath = decodeURIComponent(route.path).replace(/\\/g, '/');
+  
+  const parts = displayPath.split('/').filter(Boolean);
   const crumbs = [{ name: '🏠主页', path: '/' }];
   let path = '';
   for (const part of parts) {
@@ -992,8 +1043,7 @@ async function fetchFiles(path = '/') {
     if (path !== '/' && path.endsWith('/')) path = path.slice(0, -1);
     
     const res = await axios.get('/api/files', { 
-      params: { path }, 
-      headers: { 'x-username': user.value.username }
+      params: { path }
     });
     files.value = res.data;
   } catch (e) {
@@ -1012,19 +1062,27 @@ function getRelPath(path) {
 
 function handleRowClick(row) {
   if (row.is_dir) {
-    navigateTo(row.path);
+    // 后端返回的row.path是实际路径，需要转换为显示路径
+    const displayPath = actualPathToDisplayPath(row.path);
+    navigateTo(displayPath);
   }
 }
 
-function navigateTo(path, refresh = false) {
-  path = path.replace(/\\/g, '/').replace(/\/+/g, '/');
-  if (!path.startsWith('/')) path = '/' + path;
-  if (path !== '/' && path.endsWith('/')) path = path.slice(0, -1);
+function navigateTo(displayPath, refresh = false) {
+  // 清理显示路径
+  displayPath = displayPath.replace(/\\/g, '/').replace(/\/+/g, '/');
+  if (!displayPath.startsWith('/')) displayPath = '/' + displayPath;
+  if (displayPath !== '/' && displayPath.endsWith('/')) displayPath = displayPath.slice(0, -1);
   
-  router.push(path);
+  // 对显示路径进行URL编码，但保留路径分隔符
+  const encodedPath = displayPath.split('/').map(segment => segment ? encodeURIComponent(segment) : '').join('/');
+  
+  router.push(encodedPath);
   if (refresh) {
-    currentPath.value = path;
-    fetchFiles(path);
+    // 将显示路径转换为实际路径
+    const actualPath = displayPathToActualPath(displayPath);
+    currentPath.value = actualPath;
+    fetchFiles(actualPath);
   }
 }
 
@@ -1042,7 +1100,6 @@ function handleLogin() {
   // 如果当前是游客用户，先清除登录状态
   if (user.value.username === 'guest') {
     user.value = {};
-    localStorage.removeItem('yaolist_user');
   }
   router.push('/login');
 }
@@ -1050,12 +1107,21 @@ function handleRegister() {
   router.push('/register');
 }
 function handleLogout() {
-  user.value = {};
-  localStorage.removeItem('yaolist_user');
-  notification.success('已成功登出');
-  setTimeout(() => {
-    router.push('/login');
-  }, 1000);
+  // 调用登出API
+  axios.post('/api/logout').then(() => {
+    user.value = {};
+    notification.success('已成功登出');
+    setTimeout(() => {
+      router.push('/login');
+    }, 1000);
+  }).catch(() => {
+    // 即使API调用失败，也清除本地状态
+    user.value = {};
+    notification.success('已成功登出');
+    setTimeout(() => {
+      router.push('/login');
+    }, 1000);
+  });
 }
 
 // 切换日夜模式
@@ -1081,15 +1147,19 @@ function handlePageChange(page) {
 }
 
 function downloadFile(row) {
-  const path = encodeURIComponent(row.path);
-  const downloadUrl = `/api/download?path=${path}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+  // 将实际路径转换为显示路径
+  const displayPath = actualPathToDisplayPath(row.path);
+  const path = encodeURIComponent(displayPath);
+  const downloadUrl = `/api/download?path=${path}`;
   window.open(downloadUrl);
   notification.success('开始下载文件');
 }
 
 function copyLink(row) {
-  const path = encodeURIComponent(row.path);
-  const link = `${window.location.origin}/api/download?path=${path}&x-username=${encodeURIComponent(user.value.username || 'guest')}`;
+  // 将实际路径转换为显示路径
+  const displayPath = actualPathToDisplayPath(row.path);
+  const path = encodeURIComponent(displayPath);
+  const link = `${window.location.origin}/api/download?path=${path}`;
   navigator.clipboard.writeText(link).then(() => {
     notification.success('链接已复制到剪贴板');
   }).catch(() => {
@@ -1174,24 +1244,25 @@ function handleFileClick(row) {
     handleRowClick(row);
   } else {
     // 对于文件，使用row.path，如果不存在则构建完整路径
-    let filePath;
+    let actualFilePath;
     if (row.path) {
-      filePath = row.path;
+      actualFilePath = row.path;
     } else {
       // 构建完整路径
       const currentDir = currentPath.value.endsWith('/') ? currentPath.value : currentPath.value + '/';
-      filePath = currentDir + row.name;
+      actualFilePath = currentDir + row.name;
     }
+    
+    // 将实际路径转换为显示路径
+    const displayPath = actualPathToDisplayPath(actualFilePath);
     
     // 清理路径：移除双斜杠，确保路径格式正确
-    filePath = filePath.replace(/\\/g, '/').replace(/\/+/g, '/');
-    // 确保路径以/开头
-    if (!filePath.startsWith('/')) {
-      filePath = '/' + filePath;
-    }
+    const cleanDisplayPath = displayPath.replace(/\\/g, '/').replace(/\/+/g, '/');
     
-    // 直接跳转到FileDetail页面，使用文件路径作为路由
-    router.push(filePath);
+    // 直接跳转到FileDetail页面，使用显示路径作为路由
+    // 对路径进行URL编码，但保留路径分隔符
+    const encodedFilePath = cleanDisplayPath.split('/').map(segment => segment ? encodeURIComponent(segment) : '').join('/');
+    router.push(encodedFilePath);
   }
 }
 
@@ -1379,7 +1450,6 @@ async function batchDeleteFiles(files) {
 function openUploadDialog() {
   uploadDialog.value.show = true;
   uploadFiles.value = [];
-  closeFloatingMenu();
   
   // 确保文件夹输入框的属性正确设置
   nextTick(() => {
@@ -1644,6 +1714,7 @@ async function uploadSingleFile(fileItem) {
   }
   
   const startTime = Date.now();
+  let lastTime = startTime;
   let lastLoaded = 0;
   
   // 创建取消控制器
@@ -1654,31 +1725,35 @@ async function uploadSingleFile(fileItem) {
   try {
     await axios.post('/api/upload', formData, {
       headers: {
-        'Content-Type': 'multipart/form-data',
-        'x-username': user.value.username
+        'Content-Type': 'multipart/form-data'
       },
       signal: abortController.signal,
+      timeout: 300000, // 5分钟超时
       onUploadProgress: (progressEvent) => {
         const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
         fileItem.progress = percentCompleted;
         
-        // 计算上传速度
+        // 计算上传速度 - 使用更准确的时间间隔
         const currentTime = Date.now();
-        const timeElapsed = (currentTime - startTime) / 1000; // 秒
+        const timeElapsed = (currentTime - lastTime) / 1000; // 秒
         const bytesUploaded = progressEvent.loaded - lastLoaded;
         
-        if (timeElapsed > 0) {
+        // 只有当时间间隔大于0.5秒时才更新速度，避免频繁更新
+        if (timeElapsed >= 0.5 && bytesUploaded > 0) {
           const speed = bytesUploaded / timeElapsed; // bytes per second
+          
           if (speed > 1024 * 1024) {
-            fileItem.speed = (speed / (1024 * 1024)).toFixed(2) + ' MB/s';
+            fileItem.speed = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
           } else if (speed > 1024) {
-            fileItem.speed = (speed / 1024).toFixed(2) + ' KB/s';
+            fileItem.speed = (speed / 1024).toFixed(1) + ' KB/s';
           } else {
-            fileItem.speed = speed.toFixed(0) + ' B/s';
+            fileItem.speed = Math.round(speed) + ' B/s';
           }
+          
+          // 更新基准时间和数据量
+          lastTime = currentTime;
+          lastLoaded = progressEvent.loaded;
         }
-        
-        lastLoaded = progressEvent.loaded;
       }
     });
   } finally {
@@ -1716,8 +1791,7 @@ async function refreshFiles() {
   loading.value = true;
   try {
     const res = await axios.get('/api/files', { 
-      params: { path: currentPath.value }, 
-      headers: { 'x-username': user.value.username }
+      params: { path: currentPath.value }
     });
     files.value = res.data;
     notification.success('文件列表刷新成功');
@@ -1811,8 +1885,6 @@ async function createFolder(folderName) {
     await axios.post('/api/create-folder', {
       parent_path: currentPath.value,
       folder_name: folderName
-    }, {
-      headers: { 'x-username': user.value.username }
     });
     
     notification.success('文件夹创建成功');
@@ -1870,8 +1942,7 @@ async function uploadFile(file) {
   
   await axios.post('/api/upload', formData, {
     headers: {
-      'Content-Type': 'multipart/form-data',
-      'x-username': user.value.username
+      'Content-Type': 'multipart/form-data'
     },
     onUploadProgress: (progressEvent) => {
       // 可以在这里添加上传进度显示
@@ -1937,8 +2008,6 @@ async function renameFile(file, newName) {
     await axios.post('/api/rename', {
       old_path: oldPath,
       new_path: newPath
-    }, {
-      headers: { 'x-username': user.value.username }
     });
     notification.success('重命名成功');
     fetchFiles(currentPath.value);
@@ -1952,8 +2021,6 @@ async function deleteFile(file, showSuccessMessage = true) {
     const filePath = file.path || (currentPath.value + file.name);
     await axios.post('/api/delete', {
       path: filePath
-    }, {
-      headers: { 'x-username': user.value.username }
     });
     if (showSuccessMessage) {
       notification.success('删除成功');
@@ -1984,25 +2051,38 @@ function getRowClassName({ rowIndex }) {
   return hoverRowIndex.value === rowIndex ? 'hover-row' : '';
 }
 
+// 获取当前用户信息
+async function getCurrentUser() {
+  try {
+    const res = await axios.get('/api/user/profile');
+    if (res.status === 200 && res.data.username) {
+      user.value = res.data;
+      return true;
+    }
+  } catch (error) {
+    // 如果获取用户信息失败，尝试游客登录
+    try {
+      const guestRes = await axios.get('/api/guest-login');
+      if (guestRes.status === 200 && guestRes.data.username) {
+        user.value = guestRes.data;
+        return true;
+      }
+    } catch (guestError) {
+      console.log('游客登录失败:', guestError.response?.data);
+    }
+  }
+  return false;
+}
+
 onMounted(async () => {
   // 先加载站点信息
   loadSiteInfo();
   
-  // 如果未登录，尝试游客登录
-  if (!user.value.username) {
-    try {
-      const res = await axios.get('/api/guest-login');
-      if (res.status === 200) {
-        // 游客登录成功，保存用户信息
-        user.value = res.data;
-        localStorage.setItem('yaolist_user', JSON.stringify(res.data));
-      }
-    } catch (error) {
-      // 游客登录失败，跳转到登录页
-      console.log('游客登录失败:', error.response?.status, error.response?.data);
-      router.push('/login');
-      return;
-    }
+  // 获取当前用户信息
+  const isAuthenticated = await getCurrentUser();
+  if (!isAuthenticated) {
+    router.push('/login');
+    return;
   }
   
   // 应用保存的主题设置
@@ -2015,11 +2095,16 @@ onMounted(async () => {
     return;
   }
   
-  let path = decodeURIComponent(route.path).replace(/\\/g, '/');
-  if (path && !path.endsWith('/')) path += '/';
-  if (path === '/') path = '/';
-  currentPath.value = path;
-  fetchFiles(path);
+  // 获取显示路径
+  let displayPath = decodeURIComponent(route.path).replace(/\\/g, '/');
+  if (displayPath && !displayPath.endsWith('/')) displayPath += '/';
+  if (displayPath === '/') displayPath = '/';
+  
+  // 将显示路径转换为实际路径
+  const actualPath = displayPathToActualPath(displayPath);
+  
+  currentPath.value = actualPath;
+  fetchFiles(actualPath);
   
   // 确保文件夹输入框正确初始化
   nextTick(() => {
@@ -2031,18 +2116,10 @@ onMounted(async () => {
 });
 
 watch(() => route.path, async (newPath) => {
-  // 如果未登录，尝试游客登录
+  // 如果未登录，尝试重新获取用户信息
   if (!user.value.username) {
-    try {
-      const res = await axios.get('/api/guest-login');
-      if (res.status === 200) {
-        // 游客登录成功，保存用户信息
-        user.value = res.data;
-        localStorage.setItem('yaolist_user', JSON.stringify(res.data));
-      }
-    } catch (error) {
-      // 游客登录失败，跳转到登录页
-      console.log('游客登录失败:', error.response?.status, error.response?.data);
+    const isAuthenticated = await getCurrentUser();
+    if (!isAuthenticated) {
       router.push('/login');
       return;
     }
@@ -2053,11 +2130,16 @@ watch(() => route.path, async (newPath) => {
     return;
   }
   
-  let path = decodeURIComponent(newPath).replace(/\\/g, '/');
-  if (path && !path.endsWith('/')) path += '/';
-  if (path === '/') path = '/';
-  currentPath.value = path;
-  fetchFiles(path);
+  // 获取显示路径
+  let displayPath = decodeURIComponent(newPath).replace(/\\/g, '/');
+  if (displayPath && !displayPath.endsWith('/')) displayPath += '/';
+  if (displayPath === '/') displayPath = '/';
+  
+  // 将显示路径转换为实际路径
+  const actualPath = displayPathToActualPath(displayPath);
+  
+  currentPath.value = actualPath;
+  fetchFiles(actualPath);
 });
 
 onUnmounted(() => {
@@ -2069,6 +2151,11 @@ async function loadSiteInfo() {
   try {
     const res = await axios.get('/api/site-info');
     siteInfo.value = res.data;
+    
+    console.log('MainPage 加载站点信息:', {
+      background_url: siteInfo.value.background_url,
+      enable_glass_effect: siteInfo.value.enable_glass_effect
+    });
     
     // 应用每页显示数量
     if (siteInfo.value.items_per_page) {
@@ -2089,9 +2176,46 @@ async function loadSiteInfo() {
     if (siteInfo.value.favicon) {
       updateFavicon(siteInfo.value.favicon);
     }
+    
+    // 应用背景图片和毛玻璃效果
+    applyBackgroundAndGlassEffect();
   } catch (error) {
     console.error('加载站点信息失败:', error);
   }
+}
+
+// 应用背景图片和毛玻璃效果
+function applyBackgroundAndGlassEffect() {
+  const body = document.body;
+  
+  // 应用背景图片
+  if (siteInfo.value.background_url && siteInfo.value.background_url.trim()) {
+    body.style.backgroundImage = `url(${siteInfo.value.background_url})`;
+    body.style.backgroundSize = 'cover';
+    body.style.backgroundPosition = 'center';
+    body.style.backgroundRepeat = 'no-repeat';
+    body.style.backgroundAttachment = 'fixed';
+    body.classList.add('has-background');
+    console.log('✅ MainPage 应用背景图片:', siteInfo.value.background_url);
+  } else {
+    body.style.backgroundImage = '';
+    body.classList.remove('has-background');
+    console.log('❌ MainPage 清除背景图片');
+  }
+  
+  // 应用毛玻璃效果
+  const glassElements = document.querySelectorAll('.yaolist-card, .custom-message-card, .floating-menu-card, .dialog-container, .upload-container');
+  console.log('MainPage 找到元素数量:', glassElements.length);
+  
+  glassElements.forEach(element => {
+    if (siteInfo.value.enable_glass_effect && siteInfo.value.background_url && siteInfo.value.background_url.trim()) {
+      element.classList.add('glass-effect');
+      console.log('✅ MainPage 应用毛玻璃效果到元素:', element.className);
+    } else {
+      element.classList.remove('glass-effect');
+      console.log('❌ MainPage 清除毛玻璃效果:', element.className);
+    }
+  });
 }
 
 // 更新favicon
@@ -2132,8 +2256,7 @@ async function fetchTransferDirs(path) {
     if (!path.endsWith('/')) path += '/';
     
     const res = await axios.get('/api/files', {
-      params: { path },
-      headers: { 'x-username': user.value.username }
+      params: { path }
     });
     
     // 更新目录列表和当前路径
@@ -2165,9 +2288,7 @@ async function fetchFileInfo(path) {
     const fileName = path.substring(path.lastIndexOf('/') + 1);
     
     const response = await fetch(`/api/list?path=${encodeURIComponent(parentPath)}`, {
-      headers: {
-        'x-username': user.value.username
-      }
+      credentials: 'include'
     });
 
     if (!response.ok) {
@@ -2220,9 +2341,9 @@ async function confirmTransfer() {
       const response = await fetch('/api/transfer', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-username': user.value.username
+          'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({
           src_path: sourcePath,
           dst_path: targetPath,
@@ -2237,11 +2358,7 @@ async function confirmTransfer() {
     } else {
       console.log('开始传输文件');
       // 下载完整文件
-      const downloadResponse = await fetch(`/api/download?path=${encodeURIComponent(sourcePath)}`, {
-        headers: {
-          'x-username': user.value.username
-        }
-      });
+      const downloadResponse = await fetch(`/api/download?path=${encodeURIComponent(sourcePath)}`);
 
       if (!downloadResponse.ok) {
         throw new Error('下载文件失败');
@@ -2256,9 +2373,7 @@ async function confirmTransfer() {
       // 上传文件
       const uploadResponse = await fetch('/api/upload', {
         method: 'POST',
-        headers: {
-          'x-username': user.value.username
-        },
+        credentials: 'include',
         body: formData
       });
 
@@ -2272,9 +2387,9 @@ async function confirmTransfer() {
         const deleteResponse = await fetch('/api/delete', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'x-username': user.value.username
+            'Content-Type': 'application/json'
           },
+          credentials: 'include',
           body: JSON.stringify({
             path: sourcePath
           })

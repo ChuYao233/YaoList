@@ -32,6 +32,8 @@ struct QuarkResponse<T> {
     code: i32,
     message: String,
     data: Option<T>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,12 +78,13 @@ struct QuarkUploadPreResponse {
     format_type: String,
     size: i32,
     auth_info: String,
-    part_size: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuarkUploadCallback {
+    #[serde(rename = "callbackUrl")]
     callback_url: String,
+    #[serde(rename = "callbackBody")]
     callback_body: String,
 }
 
@@ -95,11 +98,15 @@ struct QuarkUploadMetadata {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuarkHashResponse {
+    #[serde(default)]
     hash: String,
+    #[serde(default)]
+    finish: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuarkUploadAuthResponse {
+    #[serde(rename = "auth_key")]
     auth_token: String,
 }
 
@@ -136,7 +143,7 @@ impl QuarkDriver {
         self.pr = "UCBrowser".to_string();
     }
 
-    async fn request<T: for<'de> Deserialize<'de>>(&self, path: &str, method: reqwest::Method, params: Option<HashMap<String, String>>, json: Option<serde_json::Value>) -> Result<T> {
+    async fn request_raw(&self, path: &str, method: reqwest::Method, params: Option<HashMap<String, String>>, json: Option<serde_json::Value>) -> Result<String> {
         let url = format!("{}{}", self.api_base, path);
         let mut headers = HeaderMap::new();
         headers.insert("Cookie", HeaderValue::from_str(&self.config.cookie)?);
@@ -174,6 +181,12 @@ impl QuarkDriver {
         println!("📥 响应状态: {}", status);
         println!("📄 响应内容: {}", text);
 
+        Ok(text)
+    }
+
+    async fn request<T: for<'de> Deserialize<'de>>(&self, path: &str, method: reqwest::Method, params: Option<HashMap<String, String>>, json: Option<serde_json::Value>) -> Result<T> {
+        let text = self.request_raw(path, method, params, json).await?;
+        
         let quark_resp: QuarkResponse<T> = serde_json::from_str(&text)
             .map_err(|e| anyhow::anyhow!("解析响应失败: {} - 响应内容: {}", e, text))?;
 
@@ -382,48 +395,84 @@ impl Driver for QuarkDriver {
         Ok(None)
     }
 
-    async fn upload_file(&self, parent_id: &str, name: &str, content: &[u8]) -> Result<()> {
+    async fn upload_file(&self, parent_path: &str, name: &str, content: &[u8]) -> Result<()> {
+        // 获取父目录的 fid
+        let parent_fid = self.get_fid_by_path(parent_path).await?;
+        
+        // 计算文件哈希
+        let md5_str = format!("{:x}", Md5Hasher::digest(content));
+        let sha1_str = format!("{:x}", Sha1::digest(content));
+        
+        println!("📊 文件哈希: MD5={}, SHA1={}", md5_str, sha1_str);
+        
         let pre_json = serde_json::json!({
-            "pdir_fid": parent_id,
+            "ccp_hash_update": true,
+            "dir_name": "",
             "file_name": name,
+            "format_type": mime_guess::from_path(name).first_or_octet_stream().to_string(),
+            "l_created_at": Utc::now().timestamp_millis(),
+            "l_updated_at": Utc::now().timestamp_millis(),
+            "pdir_fid": parent_fid,
             "size": content.len(),
         });
 
-        let pre: QuarkUploadPreResponse = self.request(
+        let resp_text = self.request_raw(
             "/file/upload/pre",
             reqwest::Method::POST,
             None,
             Some(pre_json),
         ).await?;
 
+        let quark_resp: QuarkResponse<QuarkUploadPreResponse> = serde_json::from_str(&resp_text)
+            .map_err(|e| anyhow::anyhow!("解析响应失败: {} - 响应内容: {}", e, resp_text))?;
+
+        if quark_resp.code != 0 {
+            return Err(anyhow::anyhow!("夸克API错误: {} (状态码: {})", quark_resp.message, quark_resp.code));
+        }
+
+        let pre = quark_resp.data.ok_or_else(|| anyhow::anyhow!("响应中没有数据"))?;
+        
+        // 从metadata中获取part_size
+        let part_size = if let Some(metadata) = quark_resp.metadata {
+            metadata.get("part_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(4194304) // 默认4MB
+        } else {
+            4194304 // 默认4MB
+        };
+
         if pre.finish {
+            println!("✅ 文件秒传成功");
             return Ok(());
         }
 
-        // 计算哈希
-        let md5_str = format!("{:x}", Md5Hasher::digest(content));
-        let sha1_str = format!("{:x}", Sha1::digest(content));
-
+        // 更新哈希信息
         let hash_json = serde_json::json!({
             "md5": md5_str,
             "sha1": sha1_str,
             "task_id": pre.task_id,
         });
 
-        let _hash_resp: QuarkHashResponse = self.request(
+        println!("🔄 更新文件哈希信息");
+        let hash_resp: QuarkHashResponse = self.request(
             "/file/update/hash",
             reqwest::Method::POST,
             None,
             Some(hash_json),
         ).await?;
 
+        // 检查是否完成（可能是秒传）
+        if hash_resp.finish || hash_resp.hash == "finish" {
+            println!("✅ 哈希匹配，文件秒传成功");
+            return Ok(());
+        }
+
         // 分片上传
-        let part_size = pre.part_size as usize;
         let mut parts = Vec::new();
         let mut offset = 0;
 
         while offset < content.len() {
-            let end = std::cmp::min(offset + part_size, content.len());
+            let end = std::cmp::min(offset + part_size as usize, content.len());
             let part = &content[offset..end];
             
             let time_str = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
@@ -446,7 +495,7 @@ impl Driver for QuarkDriver {
             ).await?;
 
             let auth_key = auth.auth_token;
-            let upload_url = format!("https://{}.{}/{}", pre.bucket, pre.upload_url.strip_prefix("https://").unwrap_or(""), pre.obj_key);
+            let upload_url = format!("https://{}.{}/{}", pre.bucket, pre.upload_url.strip_prefix("http://").unwrap_or(&pre.upload_url), pre.obj_key);
             
             let mut headers = HeaderMap::new();
             headers.insert("Authorization", HeaderValue::from_str(&auth_key)?);
@@ -485,24 +534,64 @@ impl Driver for QuarkDriver {
         }
         xml.push_str("</CompleteMultipartUpload>");
 
-        let content_md5 = format!("{:x}", Md5Hasher::digest(xml.as_bytes()));
-        let content_md5 = general_purpose::STANDARD.encode(content_md5.as_bytes());
+        let content_md5 = {
+            use md5::{Md5, Digest};
+            let mut hasher = Md5::new();
+            hasher.update(xml.as_bytes());
+            general_purpose::STANDARD.encode(hasher.finalize())
+        };
 
         let callback_json = serde_json::to_string(&pre.callback)?;
         let callback_base64 = general_purpose::STANDARD.encode(callback_json);
 
+        let time_str = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
         let commit_json = serde_json::json!({
             "auth_info": pre.auth_info,
             "auth_meta": format!(
-                "POST\n{}\napplication/xml\n{}\nx-oss-date:{}\nx-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit\n/{}/{}?callback={}&uploadId={}",
+                "POST\n{}\napplication/xml\n{}\nx-oss-callback:{}\nx-oss-date:{}\nx-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit\n/{}/{}?uploadId={}",
                 content_md5,
-                Utc::now().format("%a, %d %b %Y %H:%M:%S GMT"),
-                Utc::now().format("%a, %d %b %Y %H:%M:%S GMT"),
+                time_str,
+                callback_base64,
+                time_str,
                 pre.bucket,
                 pre.obj_key,
-                callback_base64,
                 pre.upload_id
             ),
+            "task_id": pre.task_id,
+        });
+
+        let auth: QuarkUploadAuthResponse = self.request(
+            "/file/upload/auth",
+            reqwest::Method::POST,
+            None,
+            Some(commit_json),
+        ).await?;
+
+        let upload_url = format!("https://{}.{}/{}", pre.bucket, pre.upload_url.strip_prefix("http://").unwrap_or(&pre.upload_url), pre.obj_key);
+        
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", HeaderValue::from_str(&auth.auth_token)?);
+        headers.insert("Content-MD5", HeaderValue::from_str(&content_md5)?);
+        headers.insert("Content-Type", HeaderValue::from_static("application/xml"));
+        headers.insert("Referer", HeaderValue::from_static("https://pan.quark.cn/"));
+        headers.insert("x-oss-callback", HeaderValue::from_str(&callback_base64)?);
+        headers.insert("x-oss-date", HeaderValue::from_str(&time_str)?);
+        headers.insert("x-oss-user-agent", HeaderValue::from_static("aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit"));
+
+        let resp = self.client.post(&upload_url)
+            .headers(headers)
+            .query(&[("uploadId", pre.upload_id.clone())])
+            .body(xml)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow::anyhow!("Upload commit failed: {}", resp.status()));
+        }
+
+        // 完成上传
+        let finish_json = serde_json::json!({
+            "obj_key": pre.obj_key,
             "task_id": pre.task_id,
         });
 
@@ -510,9 +599,10 @@ impl Driver for QuarkDriver {
             "/file/upload/finish",
             reqwest::Method::POST,
             None,
-            Some(commit_json),
+            Some(finish_json),
         ).await?;
 
+        println!("✅ 文件上传完成");
         Ok(())
     }
 
@@ -602,12 +692,14 @@ impl Driver for QuarkDriver {
         }
     }
 
-    async fn create_folder(&self, parent_id: &str, name: &str) -> Result<()> {
+    async fn create_folder(&self, parent_path: &str, name: &str) -> Result<()> {
+        // 获取父目录的 fid
+        let parent_fid = self.get_fid_by_path(parent_path).await?;
         let json = serde_json::json!({
             "dir_init_lock": false,
             "dir_path": "",
             "file_name": name,
-            "pdir_fid": parent_id,
+            "pdir_fid": parent_fid,
         });
 
         self.request::<serde_json::Value>(
@@ -655,11 +747,16 @@ impl Driver for QuarkDriver {
         }
     }
 
-    async fn move_file(&self, file_id: &str, new_parent_id: &str) -> Result<()> {
+    async fn move_file(&self, file_path: &str, new_parent_path: &str) -> Result<()> {
+        // 获取文件的 fid
+        let file_fid = self.get_fid_by_path(file_path).await?;
+        // 获取新父目录的 fid
+        let new_parent_fid = self.get_fid_by_path(new_parent_path).await?;
         let json = serde_json::json!({
             "action_type": 1,
-            "filelist": [file_id],
-            "to_pdir_fid": new_parent_id,
+            "exclude_fids": [],
+            "filelist": [file_fid],
+            "to_pdir_fid": new_parent_fid,
         });
 
         self.request::<serde_json::Value>(
@@ -669,14 +766,21 @@ impl Driver for QuarkDriver {
             Some(json),
         ).await?;
 
+        // 清除缓存，因为文件位置已改变
+        self.clear_path_cache().await;
         Ok(())
     }
 
-    async fn copy_file(&self, file_id: &str, new_parent_id: &str) -> Result<()> {
+    async fn copy_file(&self, file_path: &str, new_parent_path: &str) -> Result<()> {
+        // 获取文件的 fid
+        let file_fid = self.get_fid_by_path(file_path).await?;
+        // 获取新父目录的 fid
+        let new_parent_fid = self.get_fid_by_path(new_parent_path).await?;
         let json = serde_json::json!({
-            "action_type": 2,
-            "filelist": [file_id],
-            "to_pdir_fid": new_parent_id,
+            "action_type": 1,
+            "exclude_fids": [],
+            "filelist": [file_fid],
+            "to_pdir_fid": new_parent_fid,
         });
 
         self.request::<serde_json::Value>(
@@ -686,6 +790,8 @@ impl Driver for QuarkDriver {
             Some(json),
         ).await?;
 
+        // 清除缓存，因为有新文件产生
+        self.clear_path_cache().await;
         Ok(())
     }
 
