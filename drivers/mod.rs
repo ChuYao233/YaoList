@@ -3,12 +3,18 @@ pub mod onedrive;
 pub mod ftp;
 pub mod quark;
 pub mod s3;
+pub mod cloud189;
+pub mod lanzou;
+pub mod alist;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use s3::S3DriverFactory;
+use cloud189::Cloud189DriverFactory;
+use lanzou::LanzouDriverFactory;
+use alist::AListDriverFactory;
 
 #[async_trait]
 pub trait Driver: Send + Sync {
@@ -81,6 +87,15 @@ static DRIVER_REGISTRY: Lazy<HashMap<String, Box<dyn DriverFactory>>> = Lazy::ne
     
     // 注册S3驱动
     registry.insert("s3".to_string(), Box::new(S3DriverFactory) as Box<dyn DriverFactory>);
+    
+    // 注册天翼云盘驱动
+    registry.insert("cloud189".to_string(), Box::new(Cloud189DriverFactory) as Box<dyn DriverFactory>);
+    
+    // 注册蓝奏云驱动
+    registry.insert("lanzou".to_string(), Box::new(LanzouDriverFactory) as Box<dyn DriverFactory>);
+    
+    // 注册AList驱动
+    registry.insert("alist".to_string(), Box::new(AListDriverFactory) as Box<dyn DriverFactory>);
     
     registry
 });

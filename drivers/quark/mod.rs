@@ -186,7 +186,7 @@ impl QuarkDriver {
 
     async fn request<T: for<'de> Deserialize<'de>>(&self, path: &str, method: reqwest::Method, params: Option<HashMap<String, String>>, json: Option<serde_json::Value>) -> Result<T> {
         let text = self.request_raw(path, method, params, json).await?;
-        
+
         let quark_resp: QuarkResponse<T> = serde_json::from_str(&text)
             .map_err(|e| anyhow::anyhow!("解析响应失败: {} - 响应内容: {}", e, text))?;
 
@@ -391,8 +391,8 @@ impl Driver for QuarkDriver {
             return Err(anyhow::anyhow!("获取下载链接失败：响应为空"));
         }
 
-        // 返回 None 以强制使用本地代理下载
-        Ok(None)
+        // 返回实际的下载链接，供定时任务使用
+        Ok(Some(resp[0].download_url.clone()))
     }
 
     async fn upload_file(&self, parent_path: &str, name: &str, content: &[u8]) -> Result<()> {

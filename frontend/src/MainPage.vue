@@ -1109,11 +1109,11 @@ function handleRegister() {
 function handleLogout() {
   // 调用登出API
   axios.post('/api/logout').then(() => {
-    user.value = {};
-    notification.success('已成功登出');
-    setTimeout(() => {
-      router.push('/login');
-    }, 1000);
+  user.value = {};
+  notification.success('已成功登出');
+  setTimeout(() => {
+    router.push('/login');
+  }, 1000);
   }).catch(() => {
     // 即使API调用失败，也清除本地状态
     user.value = {};
@@ -1748,11 +1748,11 @@ async function uploadSingleFile(fileItem) {
             fileItem.speed = (speed / 1024).toFixed(1) + ' KB/s';
           } else {
             fileItem.speed = Math.round(speed) + ' B/s';
-          }
-          
+        }
+        
           // 更新基准时间和数据量
           lastTime = currentTime;
-          lastLoaded = progressEvent.loaded;
+        lastLoaded = progressEvent.loaded;
         }
       }
     });
@@ -2053,13 +2053,13 @@ function getRowClassName({ rowIndex }) {
 
 // 获取当前用户信息
 async function getCurrentUser() {
-  try {
+    try {
     const res = await axios.get('/api/user/profile');
     if (res.status === 200 && res.data.username) {
-      user.value = res.data;
+        user.value = res.data;
       return true;
-    }
-  } catch (error) {
+      }
+    } catch (error) {
     // 如果获取用户信息失败，尝试游客登录
     try {
       const guestRes = await axios.get('/api/guest-login');
@@ -2081,8 +2081,8 @@ onMounted(async () => {
   // 获取当前用户信息
   const isAuthenticated = await getCurrentUser();
   if (!isAuthenticated) {
-    router.push('/login');
-    return;
+      router.push('/login');
+      return;
   }
   
   // 应用保存的主题设置

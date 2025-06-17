@@ -23,7 +23,13 @@ use tower::ServiceBuilder;
 use rand::Rng;
 
 mod drivers;
+
+// 引用 src 目录下的 scheduler 模块
+#[path = "src/scheduler.rs"]
+mod scheduler;
+
 use drivers::{Driver, FileInfo};
+use scheduler::{TaskScheduler, CreateTaskRequest, UpdateTaskRequest};
 
 // 嵌入前端静态资源
 #[derive(RustEmbed)]
@@ -100,6 +106,10 @@ type StorageCache = Arc<AsyncRwLock<HashMap<i64, Storage>>>;
 // 全局存储缓存
 static STORAGE_CACHE: once_cell::sync::Lazy<StorageCache> = 
     once_cell::sync::Lazy::new(|| Arc::new(AsyncRwLock::new(HashMap::new())));
+
+// 全局任务调度器
+static TASK_SCHEDULER: once_cell::sync::Lazy<AsyncRwLock<Option<TaskScheduler>>> = 
+    once_cell::sync::Lazy::new(|| AsyncRwLock::new(None));
 
 // 重新加载存储缓存
 async fn reload_storage_cache(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -247,7 +257,7 @@ async fn user_profile(headers: HeaderMap, Extension(pool): Extension<SqlitePool>
                 user_path: user_perms.user_path,
                 created_at: None, // 可以从数据库查询
             };
-            (StatusCode::OK, axum::Json(user)).into_response()
+        (StatusCode::OK, axum::Json(user)).into_response()
         }
         None => (StatusCode::UNAUTHORIZED, "未登录".to_string()).into_response()
     }
@@ -479,6 +489,72 @@ async fn main() {
         }
     }
 
+    // 创建定时任务表
+    match sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            cron_expression TEXT NOT NULL,
+            schedule_type TEXT,
+            schedule_time TEXT,
+            schedule_day INTEGER,
+            task_type TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            destination_path TEXT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_run TEXT,
+            last_status TEXT,
+            last_error TEXT,
+            run_count INTEGER NOT NULL DEFAULT 0
+        )
+        "#
+    )
+    .execute(&pool)
+    .await
+    {
+        Ok(_) => {},
+        Err(e) => {
+            error!("定时任务表创建失败: {}", e);
+            panic!("Failed to create scheduled_tasks table: {}", e);
+        }
+    }
+
+    // 为已存在的表添加新字段（兼容性更新）
+    let _ = sqlx::query("ALTER TABLE scheduled_tasks ADD COLUMN schedule_type TEXT").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE scheduled_tasks ADD COLUMN schedule_time TEXT").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE scheduled_tasks ADD COLUMN schedule_day INTEGER").execute(&pool).await;
+
+    // 创建任务执行记录表
+    match sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS task_executions (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            files_processed INTEGER NOT NULL DEFAULT 0,
+            bytes_transferred INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            FOREIGN KEY (task_id) REFERENCES scheduled_tasks (id) ON DELETE CASCADE
+        )
+        "#
+    )
+    .execute(&pool)
+    .await
+    {
+        Ok(_) => {},
+        Err(e) => {
+            error!("任务执行记录表创建失败: {}", e);
+            panic!("Failed to create task_executions table: {}", e);
+        }
+    }
+
     // 程序启动时清除所有旧的session（使所有Cookie失效）
     match sqlx::query("DELETE FROM user_sessions")
         .execute(&pool)
@@ -546,6 +622,22 @@ async fn main() {
     // 初始化存储缓存
     if let Err(e) = reload_storage_cache(&pool).await {
         eprintln!("初始化存储缓存失败: {}", e);
+    }
+
+    // 初始化任务调度器
+    match TaskScheduler::new(pool.clone()).await {
+        Ok(scheduler) => {
+            if let Err(e) = scheduler.start().await {
+                error!("启动任务调度器失败: {}", e);
+            } else {
+                let mut global_scheduler = TASK_SCHEDULER.write().await;
+                *global_scheduler = Some(scheduler);
+                println!("📅 定时任务系统已启动");
+            }
+        }
+        Err(e) => {
+            error!("创建任务调度器失败: {}", e);
+        }
     }
 
     // 初始化/更新站点设置
@@ -652,6 +744,10 @@ async fn main() {
         .route("/api/admin/site-settings", get(get_site_settings).put(batch_update_site_settings))
         .route("/api/admin/site-settings/:key", put(update_site_setting))
         .route("/api/transfer", post(transfer_file))
+        .route("/api/tasks", get(list_tasks).post(create_task))
+        .route("/api/tasks/:id", get(get_task).put(update_task).delete(delete_task))
+        .route("/api/tasks/:id/run", post(run_task_now))
+        .route("/api/tasks/:id/executions", get(get_task_executions))
         // 驱动路由
         .merge(drivers::get_all_routes())
         // 静态资源服务，使用嵌入的资源
@@ -718,17 +814,17 @@ async fn list_files(
     } else {
         user_perms.user_path.trim_end_matches('/').to_string()
     };
-    
+
     let request_path = if params.path.trim().is_empty() || params.path == "/" {
         if user_base_path.is_empty() {
-            "/".to_string()
-        } else {
+        "/".to_string()
+    } else {
             user_base_path.clone()
         }
     } else {
         // 将用户请求的相对路径转换为实际路径
         if user_base_path.is_empty() {
-            params.path.clone()
+        params.path.clone()
         } else {
             format!("{}{}", user_base_path, params.path)
         }
@@ -823,16 +919,16 @@ async fn list_files(
             // 如果存储路径以当前目录开头且有子路径
             if mount_segments.first() == Some(&first_segment) && mount_segments.len() > 1 {
                 has_subdirs = true;
-                // 添加下一级目录
-                let second_segment = mount_segments[1];
-                if seen_paths.insert(second_segment.to_string()) {
-                    files.push(FileInfo {
-                        name: second_segment.to_string(),
-                        path: format!("/{}/{}", first_segment, second_segment),
-                        size: 0,
-                        is_dir: true,
-                        modified: storage.created_at.clone(),
-                    });
+                    // 添加下一级目录
+                    let second_segment = mount_segments[1];
+                    if seen_paths.insert(second_segment.to_string()) {
+                        files.push(FileInfo {
+                            name: second_segment.to_string(),
+                            path: format!("/{}/{}", first_segment, second_segment),
+                            size: 0,
+                            is_dir: true,
+                            modified: storage.created_at.clone(),
+                        });
                 }
             }
         }
@@ -1016,7 +1112,7 @@ async fn login_user(
             {
                 Ok(password) => password,
                 Err(e) => {
-                    error!("获取密码失败: {}", e);
+                error!("获取密码失败: {}", e);
                     return (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误".to_string()).into_response();
                 }
             };
@@ -1028,7 +1124,7 @@ async fn login_user(
                 match verify(&payload.password, &hashed_password) {
                     Ok(valid) => valid,
                     Err(e) => {
-                        error!("密码验证失败: {}", e);
+                error!("密码验证失败: {}", e);
                         return (StatusCode::INTERNAL_SERVER_ERROR, "密码验证错误".to_string()).into_response();
                     }
                 }
@@ -1500,7 +1596,7 @@ async fn list_storages(
 ) -> Result<Json<Vec<Storage>>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     let storages: Vec<Storage> = sqlx::query_as::<_, Storage>(
@@ -1521,7 +1617,7 @@ async fn create_storage(
 ) -> Result<Json<Storage>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 创建存储
@@ -1565,7 +1661,7 @@ async fn update_storage(
 ) -> Result<Json<Storage>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 获取当前存储信息
@@ -1630,7 +1726,7 @@ async fn delete_storage(
 ) -> Result<Json<()>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 删除存储
@@ -1662,8 +1758,234 @@ async fn get_available_drivers_api(
     Ok(Json(drivers::get_available_drivers()))
 }
 
+// =============== 定时任务相关API ===============
+
+// 创建定时任务
+#[axum::debug_handler]
+async fn create_task(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+    Json(payload): Json<CreateTaskRequest>,
+) -> Result<Json<scheduler::ScheduledTask>, (StatusCode, String)> {
+    // 验证用户权限 - 需要上传权限才能创建定时任务
+    let user_perms = verify_permissions(&headers, &pool, PERM_UPLOAD).await?;
+    
+    let scheduler_guard = TASK_SCHEDULER.read().await;
+    let scheduler = scheduler_guard.as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "任务调度器未初始化".to_string()))?;
+    
+    let task = scheduler.create_task(payload, user_perms.username).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(Json(task))
+}
+
+// 获取任务列表
+#[axum::debug_handler]
+async fn list_tasks(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+) -> Result<Json<Vec<scheduler::ScheduledTask>>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
+    
+    let scheduler_guard = TASK_SCHEDULER.read().await;
+    let scheduler = scheduler_guard.as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "任务调度器未初始化".to_string()))?;
+    
+    // 普通用户只能看到自己的任务，管理员可以看到所有任务
+    let created_by = if is_admin(&headers, &pool).await {
+        None
+    } else {
+        Some(user_perms.username)
+    };
+    
+    let tasks = scheduler.list_tasks(created_by).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(Json(tasks))
+}
+
+// 获取单个任务
+#[axum::debug_handler]
+async fn get_task(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Result<Json<scheduler::ScheduledTask>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
+    
+    let task: Option<scheduler::ScheduledTask> = sqlx::query_as(
+        "SELECT * FROM scheduled_tasks WHERE id = ?"
+    )
+    .bind(&task_id)
+        .fetch_optional(&pool)
+        .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    let task = task.ok_or((StatusCode::NOT_FOUND, "任务不存在".to_string()))?;
+    
+    // 检查权限：只有创建者或管理员可以查看
+    if task.created_by != user_perms.username && !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "无权限查看此任务".to_string()));
+    }
+    
+    Ok(Json(task))
+}
+
+// 更新任务
+#[axum::debug_handler]
+async fn update_task(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+    Json(payload): Json<UpdateTaskRequest>,
+) -> Result<Json<scheduler::ScheduledTask>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_UPLOAD).await?;
+    
+    // 检查任务所有权
+    let task: Option<scheduler::ScheduledTask> = sqlx::query_as(
+        "SELECT * FROM scheduled_tasks WHERE id = ?"
+    )
+    .bind(&task_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    let task = task.ok_or((StatusCode::NOT_FOUND, "任务不存在".to_string()))?;
+    
+    // 检查权限：只有创建者或管理员可以修改
+    if task.created_by != user_perms.username && !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "无权限修改此任务".to_string()));
+    }
+    
+    let scheduler_guard = TASK_SCHEDULER.read().await;
+    let scheduler = scheduler_guard.as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "任务调度器未初始化".to_string()))?;
+    
+    let updated_task = scheduler.update_task(task_id, payload).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(Json(updated_task))
+}
+
+// 删除任务
+#[axum::debug_handler]
+async fn delete_task(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Result<Json<()>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_DELETE).await?;
+    
+    // 检查任务所有权
+    let task: Option<scheduler::ScheduledTask> = sqlx::query_as(
+        "SELECT * FROM scheduled_tasks WHERE id = ?"
+    )
+    .bind(&task_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    let task = task.ok_or((StatusCode::NOT_FOUND, "任务不存在".to_string()))?;
+    
+    // 检查权限：只有创建者或管理员可以删除
+    if task.created_by != user_perms.username && !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "无权限删除此任务".to_string()));
+    }
+    
+    let scheduler_guard = TASK_SCHEDULER.read().await;
+    let scheduler = scheduler_guard.as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "任务调度器未初始化".to_string()))?;
+    
+    scheduler.delete_task(task_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(Json(()))
+}
+
+// 立即运行任务
+#[axum::debug_handler]
+async fn run_task_now(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Result<Json<()>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_UPLOAD).await?;
+    
+    // 检查任务所有权
+    let task: Option<scheduler::ScheduledTask> = sqlx::query_as(
+        "SELECT * FROM scheduled_tasks WHERE id = ?"
+    )
+    .bind(&task_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    let task = task.ok_or((StatusCode::NOT_FOUND, "任务不存在".to_string()))?;
+    
+    // 检查权限：只有创建者或管理员可以运行
+    if task.created_by != user_perms.username && !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "无权限运行此任务".to_string()));
+    }
+    
+    let scheduler_guard = TASK_SCHEDULER.read().await;
+    let scheduler = scheduler_guard.as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "任务调度器未初始化".to_string()))?;
+    
+    scheduler.run_task_now(task_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(Json(()))
+}
+
+// 获取任务执行历史
+#[axum::debug_handler]
+async fn get_task_executions(
+    headers: HeaderMap,
+    Extension(pool): Extension<SqlitePool>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<scheduler::TaskExecution>>, (StatusCode, String)> {
+    // 验证用户权限
+    let user_perms = verify_permissions(&headers, &pool, PERM_LIST).await?;
+    
+    // 检查任务所有权
+    let task: Option<scheduler::ScheduledTask> = sqlx::query_as(
+        "SELECT * FROM scheduled_tasks WHERE id = ?"
+    )
+    .bind(&task_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    let task = task.ok_or((StatusCode::NOT_FOUND, "任务不存在".to_string()))?;
+    
+    // 检查权限：只有创建者或管理员可以查看
+    if task.created_by != user_perms.username && !is_admin(&headers, &pool).await {
+        return Err((StatusCode::FORBIDDEN, "无权限查看此任务的执行历史".to_string()));
+    }
+    
+    let limit = params.get("limit")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(20);
+    
+    let scheduler_guard = TASK_SCHEDULER.read().await;
+    let scheduler = scheduler_guard.as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "任务调度器未初始化".to_string()))?;
+    
+    let executions = scheduler.get_task_executions(task_id, Some(limit)).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(Json(executions))
+}
+
 // 根据路径查找对应的存储
-async fn find_storage_for_path(path: &str) -> Option<Storage> {
+pub async fn find_storage_for_path(path: &str) -> Option<Storage> {
     let cache = STORAGE_CACHE.read().await;
     let path = path.trim_matches('/');
 
@@ -1734,7 +2056,7 @@ async fn find_storage_for_path(path: &str) -> Option<Storage> {
 }
 
 // 从存储配置创建驱动
-fn create_driver_from_storage(storage: &Storage) -> Option<Box<dyn Driver>> {
+pub fn create_driver_from_storage(storage: &Storage) -> Option<Box<dyn Driver>> {
     if let Ok(config) = serde_json::from_str::<serde_json::Value>(&storage.config) {
         drivers::create_driver(&storage.storage_type, config).ok()
     } else {
@@ -1848,13 +2170,21 @@ async fn download_file(
                                 response_headers.insert("content-length", length.to_string().parse().unwrap());
                             }
                             
+                            // 设置 Cache-Control 头以支持视频缓存
+                            response_headers.insert("cache-control", "public, max-age=31536000".parse().unwrap());
+                            
+                            // 设置 Access-Control-Allow-Origin 头以支持跨域请求
+                            response_headers.insert("access-control-allow-origin", "*".parse().unwrap());
+                            response_headers.insert("access-control-allow-methods", "GET, HEAD, OPTIONS".parse().unwrap());
+                            response_headers.insert("access-control-allow-headers", "range".parse().unwrap());
+                            
                             // 设置正确的文件名，支持中文文件名
                             let encoded_filename = urlencoding::encode(&filename);
                             response_headers.insert("content-disposition", 
                                 format!("inline; filename=\"{}\"; filename*=UTF-8''{}", filename, encoded_filename).parse().unwrap());
-                            
-                            let body = axum::body::Body::from_stream(stream);
-                            return (StatusCode::PARTIAL_CONTENT, response_headers, body).into_response();
+                                
+                                let body = axum::body::Body::from_stream(stream);
+                                return (StatusCode::PARTIAL_CONTENT, response_headers, body).into_response();
                         },
                         Ok(None) => {
                             // Range 流式下载不支持，继续使用普通流式下载
@@ -1868,7 +2198,7 @@ async fn download_file(
             }
             
             // 首先尝试流式下载
-            match driver.stream_download(&relative_path).await {
+                            match driver.stream_download(&relative_path).await {
                 Ok(Some((stream, filename))) => {
                     // 使用流式下载
                     let mut response_headers = HeaderMap::new();
@@ -1956,7 +2286,7 @@ async fn get_site_settings(
 ) -> Result<Json<Vec<SiteSetting>>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     let settings: Vec<SiteSetting> = sqlx::query_as::<_, SiteSetting>(
@@ -1978,7 +2308,7 @@ async fn update_site_setting(
 ) -> Result<Json<SiteSetting>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 更新设置
@@ -2011,7 +2341,7 @@ async fn batch_update_site_settings(
 ) -> Result<Json<Vec<SiteSetting>>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 批量更新设置
@@ -2077,7 +2407,7 @@ async fn list_users(
 ) -> Result<Json<Vec<UserResponse>>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     let users: Vec<UserResponse> = sqlx::query_as::<_, UserResponse>(
@@ -2098,7 +2428,7 @@ async fn create_user_admin(
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 验证用户路径格式
@@ -2140,7 +2470,7 @@ async fn update_user_admin(
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 获取当前用户信息
@@ -2239,20 +2569,20 @@ async fn delete_user_admin(
 ) -> Result<Json<()>, (StatusCode, String)> {
     // 验证是否为管理员
     if !is_admin(&headers, &pool).await {
-        return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
+            return Err((StatusCode::FORBIDDEN, "需要管理员权限".to_string()));
     }
 
     // 获取当前用户信息以检查是否尝试删除自己
     if let Some(current_user) = get_current_user(&headers, &pool).await {
         let current_user_info: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
             .bind(&current_user.username)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
 
         if let Some((current_user_id,)) = current_user_info {
-            if current_user_id == user_id {
-                return Err((StatusCode::BAD_REQUEST, "不能删除自己的账号".to_string()));
+        if current_user_id == user_id {
+            return Err((StatusCode::BAD_REQUEST, "不能删除自己的账号".to_string()));
             }
         }
     }

@@ -441,11 +441,11 @@ function handleRegister() {
 function handleLogout() {
   // 调用登出API
   axios.post('/api/logout').then(() => {
-    user.value = {};
-    notification.success('已成功登出');
-    setTimeout(() => {
-      router.push('/login');
-    }, 1000);
+  user.value = {};
+  notification.success('已成功登出');
+  setTimeout(() => {
+    router.push('/login');
+  }, 1000);
   }).catch(() => {
     // 即使API调用失败，也清除本地状态
     user.value = {};

@@ -258,6 +258,45 @@ impl Driver for S3Driver {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    async fn stream_download_with_range(&self, path: &str, start: Option<u64>, end: Option<u64>) -> anyhow::Result<Option<(Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> + Send + Unpin>, String, u64, Option<u64>)>> {
+        let bucket = self.get_bucket().await?;
+        let key = self.full_path(path);
+        
+        // 获取文件信息
+        let (head_resp, _) = bucket.head_object(&key).await?;
+        let total_size = head_resp.content_length.unwrap_or(0) as u64;
+        
+        // 计算实际的开始和结束位置
+        let actual_start = start.unwrap_or(0);
+        let actual_end = end.unwrap_or(total_size - 1).min(total_size - 1);
+        
+        if actual_start >= total_size {
+            return Err(anyhow::anyhow!("Range起始位置超出文件大小"));
+        }
+        
+        let content_length = actual_end - actual_start + 1;
+        
+        // 获取文件名
+        let filename = Path::new(path)
+            .file_name()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or("download")
+            .to_string();
+            
+        // 使用Range请求获取数据
+        let range = format!("bytes={}-{}", actual_start, actual_end);
+        let resp = bucket.get_object_range(&key, actual_start, Some(actual_end)).await?;
+        
+        let stream = futures::stream::once(
+            futures::future::ready(Ok(axum::body::Bytes::from(resp.bytes().to_vec())))
+        );
+        
+        let boxed_stream = Box::new(stream);
+        
+        Ok(Some((boxed_stream, filename, total_size, Some(content_length))))
+    }
 }
 
 pub struct S3DriverFactory;

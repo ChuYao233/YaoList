@@ -1,12 +1,67 @@
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf, Component};
 use tokio::fs;
 use chrono::{DateTime, Local};
+use std::env;
 
 use super::{Driver, FileInfo, DriverFactory, DriverInfo};
 
 pub struct LocalDriver {
     pub root: PathBuf,
+}
+
+impl LocalDriver {
+    fn normalize_path(&self, path: &str) -> anyhow::Result<PathBuf> {
+        // 移除开头的斜杠并规范化路径分隔符
+        let path = path.trim_start_matches('/').replace('\\', "/");
+        
+        // 处理 .. 和 . 等特殊路径组件
+        let mut normalized = PathBuf::new();
+        for component in Path::new(&path).components() {
+            match component {
+                Component::ParentDir => {
+                    if normalized.parent().is_some() {
+                        normalized.pop();
+                    }
+                },
+                Component::Normal(name) => normalized.push(name),
+                Component::CurDir => {},
+                _ => {},
+            }
+        }
+        
+        let full_path = self.root.join(normalized);
+        
+        // 获取规范化的根路径
+        let canonical_root = match self.root.canonicalize() {
+            Ok(r) => r,
+            Err(_) => {
+                // 如果根目录不存在，创建它
+                std::fs::create_dir_all(&self.root)?;
+                self.root.canonicalize()?
+            }
+        };
+        
+        // 检查目标路径是否在根目录下
+        let target_path = if full_path.exists() {
+            full_path.canonicalize()?
+        } else {
+            full_path.clone()
+        };
+        
+        if !target_path.starts_with(&canonical_root) {
+            return Err(anyhow::anyhow!("访问路径超出根目录范围"));
+        }
+        
+        Ok(full_path)
+    }
+    
+    fn ensure_dir_exists(&self, path: &Path) -> anyhow::Result<()> {
+        if !path.exists() {
+            std::fs::create_dir_all(path)?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -20,7 +75,7 @@ impl Driver for LocalDriver {
     }
 
     async fn list(&self, path: &str) -> anyhow::Result<Vec<FileInfo>> {
-        let full_path = self.root.join(path);
+        let full_path = self.normalize_path(path)?;
         let mut entries = fs::read_dir(full_path).await?;
         let mut files = Vec::new();
 
@@ -55,7 +110,7 @@ impl Driver for LocalDriver {
     }
 
     async fn download(&self, path: &str) -> anyhow::Result<tokio::fs::File> {
-        let full_path = self.root.join(path);
+        let full_path = self.normalize_path(path)?;
         let file = tokio::fs::File::open(full_path).await?;
         Ok(file)
     }
@@ -69,17 +124,23 @@ impl Driver for LocalDriver {
         let dir_path = if parent_path.is_empty() {
             self.root.clone()
         } else {
-            self.root.join(parent_path)
+            self.normalize_path(parent_path)?
         };
         
         tokio::fs::create_dir_all(&dir_path).await?;
         let file_path = dir_path.join(file_name);
+        
+        // 再次验证最终文件路径
+        if !file_path.starts_with(&self.root) {
+            return Err(anyhow::anyhow!("文件路径超出根目录范围"));
+        }
+        
         tokio::fs::write(&file_path, content).await?;
         Ok(())
     }
 
     async fn delete(&self, path: &str) -> anyhow::Result<()> {
-        let full_path = self.root.join(path);
+        let full_path = self.normalize_path(path)?;
         if full_path.exists() {
             if full_path.is_dir() {
                 std::fs::remove_dir_all(full_path)?;
@@ -91,10 +152,15 @@ impl Driver for LocalDriver {
     }
 
     async fn rename(&self, old_path: &str, new_name: &str) -> anyhow::Result<()> {
-        let old_full_path = self.root.join(old_path);
+        let old_full_path = self.normalize_path(old_path)?;
         let parent = old_full_path.parent()
             .ok_or_else(|| anyhow::anyhow!("Cannot get parent directory"))?;
         let new_full_path = parent.join(new_name);
+        
+        // 验证新路径
+        if !new_full_path.starts_with(&self.root) {
+            return Err(anyhow::anyhow!("新文件路径超出根目录范围"));
+        }
         
         if old_full_path.exists() {
             std::fs::rename(old_full_path, new_full_path)?;
@@ -106,8 +172,13 @@ impl Driver for LocalDriver {
         let folder_path = if parent_path.is_empty() {
             self.root.join(folder_name)
         } else {
-            self.root.join(parent_path).join(folder_name)
+            self.normalize_path(parent_path)?.join(folder_name)
         };
+        
+        // 验证文件夹路径
+        if !folder_path.starts_with(&self.root) {
+            return Err(anyhow::anyhow!("文件夹路径超出根目录范围"));
+        }
         
         println!("📁 本地驱动创建文件夹: {:?}", folder_path);
         
@@ -124,7 +195,7 @@ impl Driver for LocalDriver {
     }
 
     async fn get_file_info(&self, path: &str) -> anyhow::Result<FileInfo> {
-        let full_path = self.root.join(path);
+        let full_path = self.normalize_path(path)?;
         let metadata = fs::metadata(&full_path).await?;
         
         let name = full_path.file_name()
@@ -212,7 +283,7 @@ impl Driver for LocalDriver {
     
     // 本地驱动支持 Range 流式下载
     async fn stream_download_with_range(&self, path: &str, start: Option<u64>, end: Option<u64>) -> anyhow::Result<Option<(Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> + Send + Unpin>, String, u64, Option<u64>)>> {
-        let full_path = self.root.join(path);
+        let full_path = self.normalize_path(path)?;
         let filename = full_path.file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new("download"))
             .to_string_lossy()
@@ -248,7 +319,7 @@ impl Driver for LocalDriver {
                         return;
                     }
                     
-                    let mut buffer = [0u8; 8192]; // 8KB 缓冲区
+                    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB 缓冲区
                     let mut bytes_read = 0u64;
                     let target_bytes = content_length;
                     
@@ -282,15 +353,14 @@ impl Driver for LocalDriver {
                     
                     println!("✅ 本地 Range 传输完成: {} / {} 字节", bytes_read, target_bytes);
                 },
-            Err(e) => {
+                Err(e) => {
                     println!("❌ 打开本地文件失败: {}", e);
                     yield Err(e);
                 }
             }
         };
         
-        let boxed_stream: Box<dyn futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> + Send + Unpin> = 
-            Box::new(Box::pin(stream));
+        let boxed_stream = Box::new(Box::pin(stream));
         
         Ok(Some((boxed_stream, filename, file_size, Some(content_length))))
     }
@@ -315,8 +385,8 @@ impl DriverFactory for LocalDriverFactory {
                     "root": {
                         "type": "string",
                         "title": "本地路径",
-                        "description": "存储文件的本地目录路径",
-                        "placeholder": "E:/Storage"
+                        "description": "存储文件的本地目录路径（使用绝对路径）",
+                        "placeholder": if cfg!(windows) { "E:/Storage" } else { "/opt/storage" }
                     }
                 },
                 "required": ["root"]
@@ -329,13 +399,34 @@ impl DriverFactory for LocalDriverFactory {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'root' in local driver config"))?;
 
+        // 规范化根路径
+        let root_path = if cfg!(windows) {
+            // Windows 路径处理
+            PathBuf::from(root.replace('/', "\\"))
+        } else {
+            // Unix 路径处理
+            PathBuf::from(root.replace('\\', "/"))
+        };
+
+        // 确保是绝对路径
+        let root_path = if root_path.is_absolute() {
+            root_path
+        } else {
+            env::current_dir()?.join(root_path)
+        };
+
+        // 创建目录（如果不存在）
+        std::fs::create_dir_all(&root_path)?;
+
+        // 获取规范化的绝对路径
+        let canonical_root = root_path.canonicalize()?;
+
         Ok(Box::new(LocalDriver {
-            root: PathBuf::from(root),
+            root: canonical_root,
         }))
     }
 
     fn get_routes(&self) -> Option<axum::Router> {
-        // 本地驱动不需要额外的路由
         None
     }
 }

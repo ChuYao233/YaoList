@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-
+use tempfile;
 
 use crate::drivers::{Driver, FileInfo};
 
@@ -297,11 +297,6 @@ impl Driver for OneDriveDriver {
     }
 
     async fn download(&self, path: &str) -> Result<tokio::fs::File> {
-        if !self.config.proxy_download {
-            // 直接重定向模式，不应该调用此方法
-            return Err(anyhow!("Direct download mode enabled, use get_download_url instead"));
-        }
-        
         // 获取文件的下载链接
         let url = self.get_meta_url(path);
         let file: OneDriveFile = self.make_request(&url, reqwest::Method::GET).await?;
@@ -314,21 +309,18 @@ impl Driver for OneDriveDriver {
             }
             
             // 创建临时文件
-            let temp_path = format!("temp_{}", uuid::Uuid::new_v4());
-            let temp_file = tokio::fs::File::create(&temp_path).await?;
-            let mut temp_file_writer = tokio::io::BufWriter::new(temp_file);
+            let mut temp_file = tokio::fs::File::from_std(tempfile::tempfile()?);
             
-            // 直接读取所有字节
+            // 直接读取所有字节并写入临时文件
             use tokio::io::AsyncWriteExt;
             let bytes = response.bytes().await?;
-            temp_file_writer.write_all(&bytes).await?;
+            temp_file.write_all(&bytes).await?;
             
-            temp_file_writer.flush().await?;
-            let _temp_file = temp_file_writer.into_inner();
+            // 将文件指针移动到开头
+            use tokio::io::AsyncSeekExt;
+            temp_file.seek(std::io::SeekFrom::Start(0)).await?;
             
-            // 重新打开文件用于读取
-            let file = tokio::fs::File::open(&temp_path).await?;
-            Ok(file)
+            Ok(temp_file)
         } else {
             Err(anyhow!("File has no download URL"))
         }

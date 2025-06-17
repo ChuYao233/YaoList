@@ -123,6 +123,19 @@
                 <span>存储管理</span>
               </a>
             </li>
+            <li class="nav-item">
+              <a href="#" 
+                 :class="['nav-link', { active: activeTab === 'tasks' }]"
+                 @click="setActiveTab('tasks')">
+                <i class="icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"/>
+                  </svg>
+                </i>
+                <span>定时任务</span>
+              </a>
+            </li>
             <li v-if="isAdmin" class="nav-item">
               <a href="#" 
                  :class="['nav-link', { active: activeTab === 'backup' }]"
@@ -1377,6 +1390,140 @@
           </div>
         </div>
 
+        <!-- 定时任务管理 -->
+        <div v-if="activeTab === 'tasks'" class="content-section">
+          <!-- 任务列表卡片 -->
+          <div class="tasks-card">
+            <div class="card-header">
+              <div class="header-left">
+                <div class="header-icon">⏰</div>
+                <div class="header-text">
+                  <h3>定时任务</h3>
+                  <p>管理系统的自动化任务</p>
+                </div>
+              </div>
+              <div class="header-actions">
+                <button class="btn btn-primary" @click="showCreateTaskDialog = true">
+                  ＋ 创建任务
+                </button>
+                <button class="btn btn-secondary" @click="loadTasks">
+                  ↻ 刷新
+                </button>
+              </div>
+            </div>
+
+            <!-- 任务统计 -->
+            <div class="tasks-stats">
+              <div class="stat-item">
+                <div class="stat-value">{{ tasks.length }}</div>
+                <div class="stat-label">总任务数</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">{{ enabledTasksCount }}</div>
+                <div class="stat-label">已启用</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">{{ runningTasksCount }}</div>
+                <div class="stat-label">运行中</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">{{ successfulTasksCount }}</div>
+                <div class="stat-label">成功执行</div>
+              </div>
+            </div>
+
+            <!-- 任务列表 -->
+            <div class="tasks-list" v-if="tasks.length > 0">
+              <div v-for="task in tasks" :key="task.id" class="task-item" :class="{ 'task-disabled': !task.enabled }">
+                <div class="task-status">
+                  <div class="status-indicator" :class="getTaskStatusClass(task)"></div>
+                </div>
+                
+                <div class="task-content">
+                  <div class="task-header">
+                    <h4 class="task-name">{{ task.name }}</h4>
+                    <div class="task-badges">
+                      <span class="badge badge-type" :class="getTaskTypeBadgeClass(task.task_type)">
+                        {{ getTaskTypeLabel(task.task_type) }}
+                      </span>
+                      <span v-if="!task.enabled" class="badge badge-disabled">已禁用</span>
+                    </div>
+                  </div>
+                  
+                  <p class="task-description">{{ task.description || '无描述' }}</p>
+                  
+                  <div class="task-meta">
+                    <div class="meta-item">
+                      <span>⏰ {{ formatScheduleDisplay(task) }}</span>
+                    </div>
+                    <div class="meta-item">
+                      <span>✓ 执行 {{ task.run_count || 0 }} 次</span>
+                    </div>
+                    <div class="meta-item" v-if="task.last_run">
+                      <span>🕒 {{ formatTaskTime(task.last_run) }}</span>
+                    </div>
+                  </div>
+                  
+                  <div class="task-paths">
+                    <div class="path-item">
+                      <span class="path-label">源路径:</span>
+                      <span class="path-value">{{ task.source_path }}</span>
+                    </div>
+                    <div class="path-item">
+                      <span class="path-label">目标:</span>
+                      <span class="path-value">{{ task.destination_path }}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div class="task-actions">
+                  <button 
+                    class="btn-icon btn-success" 
+                    @click="runTaskNow(task.id)"
+                    :disabled="!task.enabled"
+                    title="立即运行">
+                    ▶
+                  </button>
+                  <button 
+                    class="btn-icon" 
+                    @click="viewTaskHistory(task)" 
+                    title="查看历史">
+                    ⌚
+                  </button>
+                  <button 
+                    class="btn-icon" 
+                    @click="toggleTaskStatus(task)" 
+                    :title="task.enabled ? '禁用任务' : '启用任务'"
+                    :class="{ 'btn-warning': task.enabled, 'btn-success': !task.enabled }">
+                    {{ task.enabled ? '⏸' : '▶' }}
+                  </button>
+                  <button 
+                    class="btn-icon" 
+                    @click="editTask(task)" 
+                    title="编辑">
+                    ✎
+                  </button>
+                  <button 
+                    class="btn-icon btn-danger" 
+                    @click="deleteTask(task.id)" 
+                    title="删除"
+                    :disabled="task.status === 'running'">
+                    ✖
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 空状态 -->
+            <div v-else class="empty-state">
+              <div class="empty-icon">⏰</div>
+              <h3>暂无定时任务</h3>
+              <p>创建您的第一个自动化任务来开始使用</p>
+              <button class="btn btn-primary" @click="showCreateTaskDialog = true">＋ 创建任务</button>
+            </div>
+          </div>
+        </div>
+
         <!-- 备份&恢复 -->
         <div v-if="activeTab === 'backup'" class="content-section">
           <div class="card">
@@ -1467,15 +1614,7 @@
             <h4 class="section-title">基本信息</h4>
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-                      <circle cx="12" cy="7" r="4"/>
-                    </svg>
-                  </i>
-                  存储名称
-                </label>
+                <label class="form-label">存储名称</label>
                 <input 
                   v-model="newStorage.name" 
                   type="text" 
@@ -1486,17 +1625,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M9 12l2 2 4-4"/>
-                      <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"/>
-                      <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"/>
-                      <path d="M3 12h6m6 0h6"/>
-                    </svg>
-                  </i>
-                  挂载路径
-                </label>
+                <label class="form-label">挂载路径</label>
                 <input 
                   v-model="newStorage.mount_path" 
                   type="text" 
@@ -1506,16 +1635,7 @@
                 />
               </div>
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
-                      <polyline points="3.27,6.96 12,12.01 20.73,6.96"/>
-                      <line x1="12" y1="22.08" x2="12" y2="12"/>
-                    </svg>
-                  </i>
-                  存储类型
-                </label>
+                <label class="form-label">存储类型</label>
                 <select v-model="newStorage.storage_type" required @change="onStorageTypeChange" class="form-input">
                   <option value="">请选择存储类型</option>
                   <option v-for="driver in availableDrivers" :key="driver.driver_type" :value="driver.driver_type">
@@ -1613,15 +1733,7 @@
             <h4 class="section-title">基本信息</h4>
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-                      <circle cx="12" cy="7" r="4"/>
-                    </svg>
-                  </i>
-                  存储名称
-                </label>
+                <label class="form-label">存储名称</label> 
                 <input 
                   v-model="editingStorage.name" 
                   type="text" 
@@ -1632,17 +1744,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M9 12l2 2 4-4"/>
-                      <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"/>
-                      <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"/>
-                      <path d="M3 12h6m6 0h6"/>
-                    </svg>
-                  </i>
-                  存储类型
-                </label>
+                <label class="form-label">存储类型</label>
                 <select v-model="editingStorage.storage_type" required @change="onEditStorageTypeChange" class="form-input">
                   <option value="">选择存储类型</option>
                   <option v-for="driver in availableDrivers" :key="driver.driver_type" :value="driver.driver_type">
@@ -1652,14 +1754,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 0.553-0.894L9 2l6 3 5.447-2.724A1 1 0 0 1 21 3.382v10.764a1 1 0 0 1-0.553 0.894L15 18l-6-3z"/>
-                    </svg>
-                  </i>
-                  挂载路径
-                </label>
+                <label class="form-label">挂载路径</label>
                 <input 
                   v-model="editingStorage.mount_path" 
                   type="text" 
@@ -1735,25 +1830,12 @@
       <div class="modal-content user-modal" @click.stop>
         <div class="modal-header">
           <div class="modal-title">
-            <i class="modal-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
-                <circle cx="8.5" cy="7" r="4"/>
-                <line x1="20" y1="8" x2="20" y2="14"/>
-                <line x1="23" y1="11" x2="17" y2="11"/>
-              </svg>
-            </i>
             <div>
               <h3>创建用户</h3>
               <p class="modal-subtitle">添加新的系统用户</p>
             </div>
           </div>
-          <button class="modal-close" @click="showCreateUserDialog = false">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
+          <button class="modal-close" @click="showCreateUserDialog = false">×</button>
         </div>
         
         <form @submit.prevent="createUser" class="user-form">
@@ -1761,15 +1843,7 @@
             <h4 class="section-title">基本信息</h4>
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-                      <circle cx="12" cy="7" r="4"/>
-                    </svg>
-                  </i>
-                  用户名
-                </label>
+                <label class="form-label">用户名</label>
                 <input 
                   v-model="newUser.username" 
                   type="text" 
@@ -1780,16 +1854,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <rect x="3" y="11" width="18" height="10" rx="2" ry="2"/>
-                      <circle cx="12" cy="16" r="1"/>
-                      <path d="M7 11V7a5 5 0 0110 0v4"/>
-                    </svg>
-                  </i>
-                  密码
-                </label>
+                <label class="form-label">密码</label>
                 <input 
                   v-model="newUser.password" 
                   type="password" 
@@ -1800,14 +1865,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 0.553-0.894L9 2l6 3 5.447-2.724A1 1 0 0 1 21 3.382v10.764a1 1 0 0 1-0.553 0.894L15 18l-6-3z"/>
-                    </svg>
-                  </i>
-                  用户路径
-                </label>
+                <label class="form-label">用户名</label>
                 <input 
                   v-model="newUser.user_path" 
                   type="text" 
@@ -1940,23 +1998,13 @@
       <div class="modal-content user-modal" @click.stop>
         <div class="modal-header">
           <div class="modal-title">
-            <i class="modal-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </i>
+            <i class="modal-icon">✎</i>
             <div>
               <h3>编辑用户</h3>
               <p class="modal-subtitle">修改用户信息和权限</p>
             </div>
           </div>
-          <button class="modal-close" @click="showEditUserDialog = false">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
+          <button class="modal-close" @click="showEditUserDialog = false">✖</button>
         </div>
         
         <form @submit.prevent="updateUser" class="user-form">
@@ -1964,15 +2012,7 @@
             <h4 class="section-title">基本信息</h4>
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-                      <circle cx="12" cy="7" r="4"/>
-                    </svg>
-                  </i>
-                  用户名
-                </label>
+                <label class="form-label">用户名</label>
                 <input 
                   v-model="editingUser.username" 
                   type="text" 
@@ -1983,16 +2023,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <rect x="3" y="11" width="18" height="10" rx="2" ry="2"/>
-                      <circle cx="12" cy="16" r="1"/>
-                      <path d="M7 11V7a5 5 0 0110 0v4"/>
-                    </svg>
-                  </i>
-                  新密码（留空则不修改）
-                </label>
+                <label class="form-label">新密码（留空则不修改）</label>
                 <input 
                   v-model="editingUser.password" 
                   type="password" 
@@ -2002,14 +2033,7 @@
               </div>
               
               <div class="form-group">
-                <label class="form-label">
-                  <i class="label-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 0.553-0.894L9 2l6 3 5.447-2.724A1 1 0 0 1 21 3.382v10.764a1 1 0 0 1-0.553 0.894L15 18l-6-3z"/>
-                    </svg>
-                  </i>
-                  用户路径
-                </label>
+                <label class="form-label">用户路径</label>
                 <input 
                   v-model="editingUser.user_path" 
                   type="text" 
@@ -2134,6 +2158,365 @@
             <button type="submit" class="btn btn-primary">更新用户</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- 创建任务对话框 -->
+    <div v-if="showCreateTaskDialog" class="modal-overlay" @click="showCreateTaskDialog = false">
+      <div class="modal-content task-modal" @click.stop>
+        <div class="modal-header">
+          <div class="modal-title">
+            <i class="modal-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"/>
+              </svg>
+            </i>
+            <div>
+              <h3>创建定时任务</h3>
+              <p class="modal-subtitle">配置新的自动化任务</p>
+            </div>
+          </div>
+          <button class="modal-close" @click="showCreateTaskDialog = false">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        
+        <form @submit.prevent="createTask" class="task-form">
+          <div class="form-section">
+            <h4 class="section-title">基本信息</h4>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">任务名称</label>
+                <input 
+                  v-model="newTask.name" 
+                  type="text" 
+                  required 
+                  class="form-input" 
+                  placeholder="输入任务名称"
+                />
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">任务描述</label>
+                <textarea 
+                  v-model="newTask.description" 
+                  class="form-input" 
+                  rows="3"
+                  placeholder="描述这个任务的功能"
+                ></textarea>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">任务类型</label>
+                <select v-model="newTask.task_type" required class="form-input">
+                  <option value="">请选择任务类型</option>
+                  <option value="copy">复制文件</option>
+                  <option value="move">移动文件</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="section-title">调度设置</h4>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">执行频率</label>
+                <select v-model="newTask.schedule_type" required class="form-input" @change="onScheduleTypeChange">
+                  <option value="daily">每日执行</option>
+                  <option value="weekly">每周执行</option>
+                  <option value="monthly">每月执行</option>
+                </select>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">执行时间</label>
+                <input 
+                  v-model="newTask.schedule_time" 
+                  type="time" 
+                  required 
+                  class="form-input"
+                />
+              </div>
+              
+              <div v-if="newTask.schedule_type === 'weekly'" class="form-group">
+                <label class="form-label">星期几</label>
+                <select v-model.number="newTask.schedule_day" required class="form-input">
+                  <option value="1">星期一</option>
+                  <option value="2">星期二</option>
+                  <option value="3">星期三</option>
+                  <option value="4">星期四</option>
+                  <option value="5">星期五</option>
+                  <option value="6">星期六</option>
+                  <option value="0">星期日</option>
+                </select>
+              </div>
+              
+              <div v-if="newTask.schedule_type === 'monthly'" class="form-group">
+                <label class="form-label">每月第几天</label>
+                <select v-model.number="newTask.schedule_day" required class="form-input">
+                  <option v-for="day in 31" :key="day" :value="day">{{ day }}号</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="section-title">路径设置</h4>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">源路径</label>
+                <input 
+                  v-model="newTask.source_path" 
+                  type="text" 
+                  required 
+                  class="form-input" 
+                  placeholder="例如: /source/folder"
+                />
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">目标路径</label>
+                <input 
+                  v-model="newTask.destination_path" 
+                  type="text" 
+                  required 
+                  class="form-input" 
+                  placeholder="例如: /destination/folder"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="section-title">任务选项</h4>
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input 
+                  v-model="newTask.enabled"
+                  type="checkbox"
+                />
+                <span class="checkbox-custom"></span>
+                <span>启用任务</span>
+              </label>
+            </div>
+          </div>
+          
+          <div class="form-actions">
+            <button type="button" @click="showCreateTaskDialog = false" class="btn btn-secondary">取消</button>
+            <button type="submit" class="btn btn-primary">创建任务</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 编辑任务对话框 -->
+    <div v-if="showEditTaskDialog" class="modal-overlay" @click="showEditTaskDialog = false">
+      <div class="modal-content task-modal" @click.stop>
+        <div class="modal-header">
+          <div class="modal-title">
+            <i class="modal-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </i>
+            <div>
+              <h3>编辑定时任务</h3>
+              <p class="modal-subtitle">修改任务配置</p>
+            </div>
+          </div>
+          <button class="modal-close" @click="showEditTaskDialog = false">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        
+        <form @submit.prevent="updateTask" class="task-form">
+          <div class="form-section">
+            <h4 class="section-title">基本信息</h4>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">任务名称</label>
+                <input 
+                  v-model="editingTask.name" 
+                  type="text" 
+                  required 
+                  class="form-input" 
+                  placeholder="输入任务名称"
+                />
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">任务描述</label>
+                <textarea 
+                  v-model="editingTask.description" 
+                  class="form-input" 
+                  rows="3"
+                  placeholder="描述这个任务的功能"
+                ></textarea>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">任务类型</label>
+                <select v-model="editingTask.task_type" required class="form-input">
+                  <option value="">请选择任务类型</option>
+                  <option value="copy">复制文件</option>
+                  <option value="move">移动文件</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="section-title">调度设置</h4>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">执行频率</label>
+                <select v-model="editingTask.schedule_type" required class="form-input" @change="onEditScheduleTypeChange">
+                  <option value="daily">每日执行</option>
+                  <option value="weekly">每周执行</option>
+                  <option value="monthly">每月执行</option>
+                </select>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">执行时间</label>
+                <input 
+                  v-model="editingTask.schedule_time" 
+                  type="time" 
+                  required 
+                  class="form-input"
+                />
+              </div>
+              
+              <div v-if="editingTask.schedule_type === 'weekly'" class="form-group">
+                <label class="form-label">星期几</label>
+                <select v-model.number="editingTask.schedule_day" required class="form-input">
+                  <option value="1">星期一</option>
+                  <option value="2">星期二</option>
+                  <option value="3">星期三</option>
+                  <option value="4">星期四</option>
+                  <option value="5">星期五</option>
+                  <option value="6">星期六</option>
+                  <option value="0">星期日</option>
+                </select>
+              </div>
+              
+              <div v-if="editingTask.schedule_type === 'monthly'" class="form-group">
+                <label class="form-label">每月第几天</label>
+                <select v-model.number="editingTask.schedule_day" required class="form-input">
+                  <option v-for="day in 31" :key="day" :value="day">{{ day }}号</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="section-title">路径设置</h4>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">源路径</label>
+                <input 
+                  v-model="editingTask.source_path" 
+                  type="text" 
+                  required 
+                  class="form-input" 
+                  placeholder="例如: /source/folder"
+                />
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">目标路径</label>
+                <input 
+                  v-model="editingTask.destination_path" 
+                  type="text" 
+                  required 
+                  class="form-input" 
+                  placeholder="例如: /destination/folder"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="section-title">任务选项</h4>
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input 
+                  v-model="editingTask.enabled"
+                  type="checkbox"
+                />
+                <span class="checkbox-custom"></span>
+                <span>启用任务</span>
+              </label>
+            </div>
+          </div>
+          
+          <div class="form-actions">
+            <button type="button" @click="showEditTaskDialog = false" class="btn btn-secondary">取消</button>
+            <button type="submit" class="btn btn-primary">更新任务</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 任务历史对话框 -->
+    <div v-if="showTaskHistoryDialog" class="modal-overlay" @click="showTaskHistoryDialog = false">
+      <div class="modal-content history-modal" @click.stop>
+        <div class="modal-header">
+          <div class="modal-title">
+            <div>
+              <h3>任务执行历史</h3>
+              <p class="modal-subtitle">{{ selectedTask?.name }}</p>
+            </div>
+          </div>
+          <button class="modal-close" @click="showTaskHistoryDialog = false">×</button>
+        </div>
+        
+        <div class="history-content">
+          <div v-if="taskExecutions.length > 0" class="executions-list">
+            <div v-for="execution in taskExecutions" :key="execution.id" class="execution-item" :class="execution.status">
+              <div class="execution-status">
+                <div class="status-dot" :class="execution.status"></div>
+              </div>
+              
+              <div class="execution-content">
+                <div class="execution-header">
+                  <span class="execution-time">{{ formatTaskTime(execution.started_at) }}</span>
+                  <span class="execution-duration" v-if="execution.finished_at">
+                    耗时: {{ calculateDuration(execution.started_at, execution.finished_at) }}
+                  </span>
+                </div>
+                
+                <div class="execution-stats" v-if="execution.status === 'completed'">
+                  <span class="stat">处理文件: {{ execution.files_processed }}</span>
+                  <span class="stat">传输数据: {{ formatBytes(execution.bytes_transferred) }}</span>
+                </div>
+                
+                <div class="execution-error" v-if="execution.error_message">
+                  <span class="error-label">错误信息:</span>
+                  <span class="error-message">{{ execution.error_message }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div v-else class="empty-history">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12,6 12,12 16,14"/>
+            </svg>
+            <h3>暂无执行记录</h3>
+            <p>此任务还没有执行过</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2357,6 +2740,37 @@ const editingStorage = ref({
   enabled: true
 })
 
+// 定时任务管理相关
+const tasks = ref([])
+const showCreateTaskDialog = ref(false)
+const showEditTaskDialog = ref(false)
+const showTaskHistoryDialog = ref(false)
+const newTask = ref({
+  name: '',
+  description: '',
+  task_type: '',
+  schedule_type: 'daily',
+  schedule_time: '02:00',
+  schedule_day: null,
+  source_path: '',
+  destination_path: '',
+  enabled: true
+})
+const editingTask = ref({
+  id: null,
+  name: '',
+  description: '',
+  task_type: '',
+  schedule_type: 'daily',
+  schedule_time: '02:00',
+  schedule_day: null,
+  source_path: '',
+  destination_path: '',
+  enabled: true
+})
+const selectedTask = ref(null)
+const taskExecutions = ref([])
+
 // 备份相关
 const backupFile = ref(null)
 
@@ -2389,6 +2803,68 @@ const editingDriver = computed(() => {
   return availableDrivers.value.find(driver => driver.driver_type === editingStorage.value.storage_type)
 })
 
+// 定时任务计算属性
+const enabledTasksCount = computed(() => {
+  return tasks.value.filter(task => task.enabled).length
+})
+
+const runningTasksCount = computed(() => {
+  // 这里可以根据实际的运行状态来计算
+  return 0
+})
+
+const successfulTasksCount = computed(() => {
+  return tasks.value.filter(task => task.last_status === 'completed').length
+})
+
+// 格式化调度显示
+function formatScheduleDisplay(task) {
+  if (!task.schedule_type || !task.schedule_time) {
+    return task.cron_expression || '未设置'
+  }
+  
+  const time = task.schedule_time
+  let display = ''
+  
+  switch (task.schedule_type) {
+    case 'daily':
+      display = `每天 ${time}`
+      break
+    case 'weekly':
+      const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+      display = `每周${weekDays[task.schedule_day || 0]} ${time}`
+      break
+    case 'monthly':
+      display = `每月${task.schedule_day || 1}号 ${time}`
+      break
+    default:
+      display = task.cron_expression || '未设置'
+  }
+  
+  return display
+}
+
+// 调度类型变化处理
+function onScheduleTypeChange() {
+  if (newTask.value.schedule_type === 'daily') {
+    newTask.value.schedule_day = null
+  } else if (newTask.value.schedule_type === 'weekly') {
+    newTask.value.schedule_day = 1 // 默认星期一
+  } else if (newTask.value.schedule_type === 'monthly') {
+    newTask.value.schedule_day = 1 // 默认1号
+  }
+}
+
+function onEditScheduleTypeChange() {
+  if (editingTask.value.schedule_type === 'daily') {
+    editingTask.value.schedule_day = null
+  } else if (editingTask.value.schedule_type === 'weekly') {
+    editingTask.value.schedule_day = 1 // 默认星期一
+  } else if (editingTask.value.schedule_type === 'monthly') {
+    editingTask.value.schedule_day = 1 // 默认1号
+  }
+}
+
 // 页面标题
 function getPageTitle() {
   const titles = {
@@ -2396,6 +2872,7 @@ function getPageTitle() {
     site: '站点设置',
     users: '用户管理',
     storage: '存储管理',
+    tasks: '定时任务',
     backup: '备份&恢复',
     about: '关于YaoList',
     docs: '文档'
@@ -2406,13 +2883,21 @@ function getPageTitle() {
 // 设置活动标签
 function setActiveTab(tab) {
   // 如果是游客用户，限制访问管理功能
-  if (isGuest.value && ['site', 'users', 'storage', 'backup'].includes(tab)) {
+  if (isGuest.value && ['site', 'users', 'storage', 'backup', 'tasks'].includes(tab)) {
     notification.warning('游客用户无权访问此功能')
+    return
+  }
+  // 对于定时任务，检查是否有上传权限（创建任务需要）
+  if (tab === 'tasks' && !hasSpecificPermission(PERM_UPLOAD) && !isAdmin.value) {
+    notification.warning('您没有权限访问定时任务功能')
     return
   }
   activeTab.value = tab
   if (tab === 'site') {
     siteSubTab.value = 'general' // 默认显示基本设置
+  }
+  if (tab === 'tasks') {
+    loadTasks() // 切换到任务页面时重新加载任务列表
   }
 }
 
@@ -3002,6 +3487,212 @@ async function restoreBackup() {
   }
 }
 
+// =============== 定时任务相关方法 ===============
+
+// 加载任务列表
+async function loadTasks() {
+  try {
+    const res = await axios.get('/api/tasks')
+    tasks.value = res.data
+  } catch (error) {
+    console.error('加载任务列表失败:', error)
+    notification.error('加载任务列表失败')
+  }
+}
+
+// 创建任务
+async function createTask() {
+  try {
+    await axios.post('/api/tasks', newTask.value)
+    await loadTasks()
+    showCreateTaskDialog.value = false
+    resetNewTask()
+    notification.success('任务创建成功')
+  } catch (error) {
+    notification.error(error.response?.data || '创建任务失败')
+  }
+}
+
+// 更新任务
+async function updateTask() {
+  try {
+    await axios.put(`/api/tasks/${editingTask.value.id}`, editingTask.value)
+    await loadTasks()
+    showEditTaskDialog.value = false
+    notification.success('任务更新成功')
+  } catch (error) {
+    notification.error(error.response?.data || '更新任务失败')
+  }
+}
+
+// 删除任务
+async function deleteTask(taskId) {
+  if (!confirm('确定要删除这个任务吗？')) return
+  
+  try {
+    await axios.delete(`/api/tasks/${taskId}`)
+    await loadTasks()
+    notification.success('任务删除成功')
+  } catch (error) {
+    notification.error(error.response?.data || '删除任务失败')
+  }
+}
+
+// 切换任务启用/禁用状态
+async function toggleTaskStatus(task) {
+  try {
+    await axios.put(`/api/tasks/${task.id}`, {
+      enabled: !task.enabled
+    })
+    
+    task.enabled = !task.enabled
+    notification.success(`任务已${task.enabled ? '启用' : '禁用'}`)
+  } catch (error) {
+    notification.error(error.response?.data || '操作失败')
+  }
+}
+
+// 立即运行任务
+async function runTaskNow(taskId) {
+  try {
+    await axios.post(`/api/tasks/${taskId}/run`)
+    notification.success('任务已开始执行')
+    // 稍后刷新任务列表以获取最新状态
+    setTimeout(() => {
+      loadTasks()
+    }, 1000)
+  } catch (error) {
+    notification.error(error.response?.data || '运行任务失败')
+  }
+}
+
+// 查看任务历史
+async function viewTaskHistory(task) {
+  selectedTask.value = task
+  showTaskHistoryDialog.value = true
+  
+  try {
+    const res = await axios.get(`/api/tasks/${task.id}/executions`)
+    taskExecutions.value = res.data
+  } catch (error) {
+    console.error('加载执行历史失败:', error)
+    notification.error('加载执行历史失败')
+  }
+}
+
+// 编辑任务
+function editTask(task) {
+  editingTask.value = {
+    id: task.id,
+    name: task.name,
+    description: task.description || '',
+    task_type: task.task_type,
+    schedule_type: task.schedule_type || 'daily',
+    schedule_time: task.schedule_time || '02:00',
+    schedule_day: task.schedule_day,
+    source_path: task.source_path,
+    destination_path: task.destination_path,
+    enabled: task.enabled
+  }
+  showEditTaskDialog.value = true
+}
+
+// 重置新任务表单
+function resetNewTask() {
+  newTask.value = {
+    name: '',
+    description: '',
+    task_type: '',
+    schedule_type: 'daily',
+    schedule_time: '02:00',
+    schedule_day: null,
+    source_path: '',
+    destination_path: '',
+    enabled: true
+  }
+}
+
+// 获取任务状态样式类
+function getTaskStatusClass(task) {
+  if (!task.enabled) return 'disabled'
+  
+  switch (task.last_status) {
+    case 'completed':
+      return 'success'
+    case 'failed':
+      return 'error'
+    case 'running':
+      return 'running'
+    default:
+      return 'pending'
+  }
+}
+
+// 获取任务类型徽章样式类
+function getTaskTypeBadgeClass(taskType) {
+  switch (taskType) {
+    case 'copy':
+      return 'badge-copy'
+    case 'move':
+      return 'badge-move'
+    default:
+      return 'badge-default'
+  }
+}
+
+// 获取任务类型标签
+function getTaskTypeLabel(taskType) {
+  switch (taskType) {
+    case 'copy':
+      return '复制'
+    case 'move':
+      return '移动'
+    default:
+      return '未知'
+  }
+}
+
+// 格式化任务时间
+function formatTaskTime(timeString) {
+  if (!timeString) return '-'
+  const date = new Date(timeString)
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
+// 计算执行时长
+function calculateDuration(startTime, endTime) {
+  const start = new Date(startTime)
+  const end = new Date(endTime)
+  const diff = end - start
+  
+  if (diff < 1000) {
+    return `${diff}ms`
+  } else if (diff < 60000) {
+    return `${Math.round(diff / 1000)}s`
+  } else {
+    const minutes = Math.floor(diff / 60000)
+    const seconds = Math.round((diff % 60000) / 1000)
+    return `${minutes}m ${seconds}s`
+  }
+}
+
+// 格式化字节数
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B'
+  
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
 // 组件挂载时加载数据
 onMounted(async () => {
   await loadCurrentUser() // 首先加载当前用户信息
@@ -3009,6 +3700,7 @@ onMounted(async () => {
   await loadAvailableDrivers()
   await loadUsers()
   await loadSiteSettings()
+  await loadTasks() // 加载定时任务列表
   
   // 应用保存的主题设置
   if (isDarkMode.value) {
