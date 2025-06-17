@@ -50,3 +50,31 @@ add_settings.sql
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# 压缩文件
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+# 大文件
+*.iso
+*.bin
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 编译输出
+/target/
+/dist/
+/build/
+*.o
+*.obj
+*.class
+
+# 测试文件
+/test/
+/tests/
+*.test.*
