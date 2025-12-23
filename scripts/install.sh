@@ -113,8 +113,11 @@ create_default_config() {
     "db_file": "yaolist.db"
   },
   "search": {
-    "db_dir": "search_db",
-    "enabled": true
+    "db_dir": "search",
+    "db_file": "search.db"
+  },
+  "geoip": {
+    "db_dir": "geoip"
   }
 }
 EOF
