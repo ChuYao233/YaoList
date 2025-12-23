@@ -1,0 +1,39 @@
+// Driver package / 驱动包
+pub mod local;
+pub mod onedrive;
+pub mod quark;
+pub mod ftp;
+pub mod cloud189;
+#[path = "123openapi/mod.rs"]
+pub mod pan123_open;
+pub mod smb;
+pub mod webdav;
+pub mod s3;
+pub mod lanzou;
+
+use crate::storage::StorageManager;
+
+/// Register all drivers to StorageManager / 注册所有驱动
+pub async fn register_all(manager: &StorageManager) -> anyhow::Result<()> {
+    // Register local driver (using LocalDriverFactory from storage module) / 注册本地驱动
+    manager.register_factory(Box::new(crate::storage::LocalDriverFactory)).await?;
+    // Register OneDrive driver (OAuth refresh_token method) / 注册OneDrive驱动
+    manager.register_factory(Box::new(onedrive::OneDriveDriverFactory)).await?;
+    // Register Quark cloud drive driver / 注册夸克网盘驱动
+    manager.register_factory(Box::new(quark::QuarkDriverFactory)).await?;
+    // Register FTP driver / 注册FTP驱动
+    manager.register_factory(Box::new(ftp::FtpDriverFactory)).await?;
+    // Register Cloud189 (China Telecom) cloud drive driver / 注册天翼云盘驱动
+    manager.register_factory(Box::new(cloud189::Cloud189DriverFactory)).await?;
+    // Register 123 Cloud Open Platform driver / 注册123云盘开放平台驱动
+    manager.register_factory(Box::new(pan123_open::Pan123OpenDriverFactory)).await?;
+    // Register SMB/CIFS driver / 注册SMB网络共享驱动
+    manager.register_factory(Box::new(smb::SmbDriverFactory)).await?;
+    // Register WebDAV driver / 注册WebDAV驱动
+    manager.register_factory(Box::new(webdav::WebDavDriverFactory)).await?;
+    // Register S3 driver / 注册S3对象存储驱动
+    manager.register_factory(Box::new(s3::S3DriverFactory)).await?;
+    // Register Lanzou Cloud driver / 注册蓝奏云驱动
+    manager.register_factory(Box::new(lanzou::LanzouDriverFactory)).await?;
+    Ok(())
+}

@@ -1,0 +1,30 @@
+# Rust
+/target/
+Cargo.lock
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Data directory
+/data/
+/thumbnails/
+/false/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Config (contains sensitive data)
+config.json
