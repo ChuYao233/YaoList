@@ -1,6 +1,7 @@
 # Rust
 /target/
 Cargo.lock
+*.zip
 
 # Database
 *.db
