@@ -146,9 +146,18 @@ docker run -d \
 
 このプロジェクトは [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.txt) ライセンスの下でオープンソースソフトウェアとして公開されています。
 
+## 📚 ドキュメント
+
+> ⚠️ **ドキュメントはまだ作成中です。** ご協力いただける方を歓迎します！
+
 ## 🤝 貢献
 
 貢献を歓迎します！お気軽にPull Requestを提出してください。
+
+**特に以下の分野でのご協力をお待ちしています：**
+- 📖 ドキュメントの作成
+- 🌐 他言語への翻訳
+- 🐛 バグ報告と修正
 
 1. リポジトリをFork
 2. 機能ブランチを作成 (`git checkout -b feature/AmazingFeature`)
@@ -162,5 +171,4 @@ docker run -d \
 
 ## 🙏 謝辞
 
-- [AList](https://github.com/alist-org/alist) と [OpenList](https://github.com/OpenListTeam/OpenList) からインスピレーションを受けました
-- すべての貢献者に感謝します
+- 本プロジェクトの一部のコードロジックは [OpenList](https://github.com/OpenListTeam/OpenList) を参考にしています

@@ -146,9 +146,18 @@ Configuration file: `config.json`
 
 This project is open-source software licensed under the [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.txt) license.
 
+## 📚 Documentation
+
+> ⚠️ **Documentation is still under construction.** If you're interested in helping, contributions are very welcome!
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+**We especially need help with:**
+- 📖 Writing documentation
+- 🌐 Translating to other languages
+- 🐛 Bug reports and fixes
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
@@ -162,5 +171,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 🙏 Acknowledgments
 
-- Inspired by [AList](https://github.com/alist-org/alist) and [OpenList](https://github.com/OpenListTeam/OpenList)
-- Thanks to all contributors
+- Some code logic in this project is referenced from [OpenList](https://github.com/OpenListTeam/OpenList)

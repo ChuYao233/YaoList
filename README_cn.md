@@ -145,9 +145,18 @@ docker run -d \
 
 本项目是根据 [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.txt) 许可证开源的软件。
 
+## 📚 文档
+
+> ⚠️ **文档仍在编写中。** 如果您有兴趣帮忙，非常欢迎贡献！
+
 ## 🤝 贡献
 
 欢迎贡献！请随时提交 Pull Request。
+
+**我们特别需要以下方面的帮助：**
+- 📖 编写文档
+- 🌐 翻译成其他语言
+- 🐛 Bug 报告和修复
 
 1. Fork 本仓库
 2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
@@ -161,5 +170,4 @@ docker run -d \
 
 ## 🙏 致谢
 
-- 灵感来自 [AList](https://github.com/alist-org/alist) 和 [OpenList](https://github.com/OpenListTeam/OpenList)
-- 感谢所有贡献者
+- 本项目部分代码逻辑参考自 [OpenList](https://github.com/OpenListTeam/OpenList)

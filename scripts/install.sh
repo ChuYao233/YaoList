@@ -33,8 +33,9 @@ check_root() {
 get_arch() {
     arch=$(uname -m)
     case $arch in
-        x86_64|amd64) echo "amd64" ;;
-        aarch64|arm64) echo "arm64" ;;
+        x86_64|amd64) echo "x86_64" ;;
+        aarch64|arm64) echo "aarch64" ;;
+        riscv64) echo "riscv64" ;;
         *) error "不支持的架构: $arch"; exit 1 ;;
     esac
 }
@@ -54,13 +55,8 @@ get_current_version() {
 download_binary() {
     version=$1
     arch=$(get_arch)
-    # 文件名格式: yaolist-{version}-linux-x86_64
-    case $arch in
-        amd64) arch_name="x86_64" ;;
-        arm64) arch_name="aarch64" ;;
-        *) arch_name="$arch" ;;
-    esac
-    filename="yaolist-${version}-linux-${arch_name}"
+    # 文件名格式: yaolist-{version}-linux-{arch}
+    filename="yaolist-${version}-linux-${arch}"
     url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${filename}"
     
     info "下载 YaoList ${version} (linux/${arch})..."
