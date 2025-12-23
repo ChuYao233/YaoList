@@ -9,7 +9,7 @@ INSTALL_DIR="/opt/yaolist"
 DATA_DIR="${INSTALL_DIR}/data"
 CONFIG_FILE="${INSTALL_DIR}/config.json"
 LOG_FILE="${INSTALL_DIR}/yaolist.log"
-BINARY_NAME="yaolist-backend"
+BINARY_NAME="yaolist"
 SERVICE_NAME="yaolist"
 
 RED='\033[0;31m'
@@ -54,7 +54,13 @@ get_current_version() {
 download_binary() {
     version=$1
     arch=$(get_arch)
-    filename="${BINARY_NAME}-linux-${arch}"
+    # 文件名格式: yaolist-{version}-linux-x86_64
+    case $arch in
+        amd64) arch_name="x86_64" ;;
+        arm64) arch_name="aarch64" ;;
+        *) arch_name="$arch" ;;
+    esac
+    filename="yaolist-${version}-linux-${arch_name}"
     url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${filename}"
     
     info "下载 YaoList ${version} (linux/${arch})..."
