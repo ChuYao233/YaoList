@@ -29,33 +29,40 @@
 
 ### 🎯 Core Features
 
-- [x] **High Performance** - Rust backend with async I/O, handles thousands of concurrent connections
+- [x] **High Performance & Low Memory** - Rust backend with async I/O, low memory footprint, handles thousands of concurrent connections
 - [x] **Modern UI** - Clean React frontend with TailwindCSS, supports dark mode
+- [x] **Custom Themes** - Customizable page backgrounds and glassmorphism styles
 - [x] **File Preview** - PDF, Markdown, code, images, video, audio with subtitle/lyrics support
-- [x] **Office Preview** - DOCX, PPTX, XLSX document preview
+- [x] **Image Preview** - Supports HEIC and almost all RAW formats
+- [x] **Encrypted Audio** - Supports NCM and other encrypted audio formats (manual enable required)
+- [x] **Office Preview** - DOCX, PPTX, XLSX local parsing, no public domain required, no Microsoft/Google online services
 - [x] **Archive Support** - Browse ZIP, 7Z, TAR, GZ archives without extraction
-- [x] **Full-text Search** - Built-in search engine with Chinese word segmentation (Jieba)
+- [x] **Full-text Search** - Built-in search engine with Chinese word segmentation (Jieba), lightweight index database
 - [x] **WebDAV Server** - Access your files via WebDAV protocol
-- [x] **Direct Links** - Generate permanent direct download links
-- [x] **Sharing** - Share files/folders with password protection and expiration
+- [x] **Direct Links** - Generate permanent direct download links with access count limits
+- [x] **Sharing** - Share files/folders with password protection, expiration and access count limits
 
 ### 🔐 Security & Management
 
-- [x] **User System** - Multi-user support with role-based permissions
+- [x] **User System** - Multi-user support with group-based permissions
+- [x] **Self-Registration** - Users can self-register via phone/email
 - [x] **Two-Factor Auth** - TOTP-based 2FA support
 - [x] **Group Management** - Organize users into groups with different permissions
 - [x] **Path Protection** - Password protect specific paths
 - [x] **Hide Rules** - Hide files/folders based on patterns
-- [x] **Login Security** - Captcha, rate limiting, IP blocking
+- [x] **Login Security** - Captcha on login retry, rate limiting, IP blocking
+- [x] **Usage Statistics** - Track each user's traffic and access count
 
 ### ⚡ Advanced Features
 
-- [x] **Task Manager** - Background task queue for copy/move operations
+- [x] **Task Manager** - Clean background task queue for copy/move operations
 - [x] **Load Balancing** - Multi-node load balancing with GeoIP routing
 - [x] **Notification** - Email & SMS notifications
 - [x] **Backup/Restore** - Export and import configuration
 - [x] **Thumbnail Generation** - Auto-generate image thumbnails
 - [x] **Streaming** - Range request support for video streaming
+- [ ] **Scheduled Tasks** - Coming soon
+- [ ] **File Collection** - File collection form feature, coming soon
 
 ## 🚀 Quick Start
 
