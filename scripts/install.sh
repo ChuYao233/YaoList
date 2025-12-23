@@ -355,6 +355,9 @@ show_menu() {
 main() {
     check_root
     
+    # 确保从终端读取输入
+    exec < /dev/tty
+    
     while true; do
         show_menu
         read -p "请输入选择 [0-9]: " choice
