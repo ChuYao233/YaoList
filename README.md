@@ -59,7 +59,6 @@
 - [x] **Load Balancing** - Multi-node load balancing with GeoIP routing
 - [x] **Notification** - Email & SMS notifications
 - [x] **Backup/Restore** - Export and import configuration
-- [x] **Thumbnail Generation** - Auto-generate image thumbnails
 - [x] **Streaming** - Range request support for video streaming
 - [ ] **Scheduled Tasks** - Coming soon
 - [ ] **File Collection** - File collection form feature, coming soon
