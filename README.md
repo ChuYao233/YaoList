@@ -32,7 +32,7 @@
 - [x] **High Performance & Low Memory** - Rust backend with async I/O, low memory footprint, handles thousands of concurrent connections
 - [x] **Modern UI** - Clean React frontend with TailwindCSS, supports dark mode
 - [x] **Custom Themes** - Customizable page backgrounds and glassmorphism styles
-- [x] **File Preview** - PDF, Markdown, code, images, video, audio with subtitle/lyrics support
+- [x] **File Preview** - PDF, Markdown, code, images, video, audio
 - [x] **Image Preview** - Supports HEIC and almost all RAW formats
 - [x] **Encrypted Audio** - Supports NCM and other encrypted audio formats (manual enable required)
 - [x] **Office Preview** - DOCX, PPTX, XLSX local parsing, no public domain required, no Microsoft/Google online services
@@ -96,16 +96,6 @@ cargo build --release
 
 # Run
 ./target/release/yaolist-backend
-```
-
-### Docker
-
-```bash
-docker run -d \
-  --name yaolist \
-  -p 8180:8180 \
-  -v /path/to/data:/app/data \
-  chuyao233/yaolist:latest
 ```
 
 ## ⚙️ Configuration
@@ -178,3 +168,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 🙏 Acknowledgments
 
 - Some code logic in this project is referenced from [OpenList](https://github.com/OpenListTeam/OpenList)
+
