@@ -193,9 +193,14 @@ pub async fn fs_download(
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     // Validate download domain / 验证下载域名
-    if let Some(host) = headers.get(axum::http::header::HOST).and_then(|h| h.to_str().ok()) {
+    // 支持反代环境：优先使用 X-Forwarded-Host，其次使用 HOST
+    let request_host = headers.get("X-Forwarded-Host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|h| h.to_str().ok());
+    
+    if let Some(host) = request_host {
         if !state.download_settings.validate_domain(host) {
-            tracing::warn!("Download access from invalid domain: {}", host);
+            tracing::warn!("Download access from invalid domain: {} (X-Forwarded-Host or HOST)", host);
             return Err(StatusCode::FORBIDDEN);
         }
     }
@@ -240,6 +245,8 @@ pub async fn fs_download(
             return Ok(Response::builder()
                 .status(StatusCode::FOUND)
                 .header(header::LOCATION, direct_url)
+                .header("Referrer-Policy", "no-referrer")
+                .header(header::CACHE_CONTROL, "max-age=0, no-cache, no-store, must-revalidate")
                 .body(Body::empty())
                 .unwrap());
         }
@@ -430,15 +437,35 @@ pub async fn fs_get_direct_link(
     
     let filename = path.split('/').last().unwrap_or("file");
     
-    // Get scheme from X-Forwarded-Proto header / 从反代请求头获取协议
+    // Get scheme and host from headers for building URL
+    // 从请求头获取协议和域名用于构建URL
     let scheme = headers.get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    let request_host = headers.get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+    
+    // 构建直链URL的辅助函数
+    let build_dlink_url = |dlink_path: &str| -> String {
+        let configured = state.download_settings.get_download_domain();
+        if configured.is_empty() {
+            // 未配置下载域名，使用请求的Host构建完整URL
+            if request_host.is_empty() {
+                dlink_path.to_string()
+            } else {
+                format!("{}://{}{}", scheme, request_host, dlink_path)
+            }
+        } else {
+            state.download_settings.build_download_url(dlink_path, scheme)
+        }
+    };
     
     if let Some((sign,)) = existing {
         // Build direct link URL with configured domain / 使用配置的下载域名生成直链
         let dlink_path = format!("/dlink/{}/{}", sign, urlencoding::encode(filename));
-        let dlink_url = state.download_settings.build_download_url(&dlink_path, scheme);
+        let dlink_url = build_dlink_url(&dlink_path);
         return Ok(Json(json!({
             "code": 200,
             "message": "success",
@@ -475,7 +502,7 @@ pub async fn fs_get_direct_link(
     
     // Build direct link URL with configured domain / 使用配置的下载域名生成直链
     let dlink_path = format!("/dlink/{}/{}", sign, urlencoding::encode(filename));
-    let dlink_url = state.download_settings.build_download_url(&dlink_path, scheme);
+    let dlink_url = build_dlink_url(&dlink_path);
     
     Ok(Json(json!({
         "code": 200,
@@ -515,9 +542,14 @@ pub async fn direct_link_download(
     Query(query): Query<DlinkQuery>,
 ) -> Response {
     // Validate download domain / 验证下载域名
-    if let Some(host) = headers.get(axum::http::header::HOST).and_then(|h| h.to_str().ok()) {
+    // 支持反代环境：优先使用 X-Forwarded-Host，其次使用 HOST
+    let request_host = headers.get("X-Forwarded-Host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|h| h.to_str().ok());
+    
+    if let Some(host) = request_host {
         if !state.download_settings.validate_domain(host) {
-            tracing::warn!("Direct link access from invalid domain: {}", host);
+            tracing::warn!("Direct link access from invalid domain: {} (X-Forwarded-Host or HOST)", host);
             return direct_link_error_response(StatusCode::FORBIDDEN, "INVALID_DOMAIN", "请使用正确的下载域名访问");
         }
     }

@@ -10,6 +10,9 @@ pub mod smb;
 pub mod webdav;
 pub mod s3;
 pub mod lanzou;
+pub mod pikpak;
+pub mod yun139;
+pub mod pan115;
 
 use crate::storage::StorageManager;
 
@@ -35,5 +38,11 @@ pub async fn register_all(manager: &StorageManager) -> anyhow::Result<()> {
     manager.register_factory(Box::new(s3::S3DriverFactory)).await?;
     // Register Lanzou Cloud driver / 注册蓝奏云驱动
     manager.register_factory(Box::new(lanzou::LanzouDriverFactory)).await?;
+    // Register PikPak driver / 注册PikPak网盘驱动
+    manager.register_factory(Box::new(pikpak::PikPakDriverFactory)).await?;
+    // Register 139Yun (China Mobile) cloud drive driver / 注册中国移动云盘(139云)驱动
+    manager.register_factory(Box::new(yun139::Yun139DriverFactory)).await?;
+    // Register 115 Cloud driver / 注册115云盘驱动
+    manager.register_factory(Box::new(pan115::Pan115DriverFactory)).await?;
     Ok(())
 }

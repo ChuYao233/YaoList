@@ -29,3 +29,7 @@ Thumbs.db
 
 # Config (contains sensitive data)
 config.json
+
+# Scripts (only keep install.sh)
+/scripts/*
+!/scripts/install.sh

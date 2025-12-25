@@ -26,6 +26,7 @@
 - [x] **[WebDAV](https://en.wikipedia.org/wiki/WebDAV)** - WebDAV Protocol
 - [x] **[SMB/CIFS](https://en.wikipedia.org/wiki/Server_Message_Block)** - Windows Network Share (Native Support)
 - [x] **[S3](https://aws.amazon.com/s3)** - Amazon S3 & Compatible Services (MinIO, Cloudflare R2, etc.)
+- [ ] **[115 Cloud](https://115.com)** - 115 Cloud Drive (In Development)
 
 ### 🎯 Core Features
 

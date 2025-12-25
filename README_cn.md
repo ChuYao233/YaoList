@@ -25,6 +25,7 @@
 - [x] **[WebDAV](https://en.wikipedia.org/wiki/WebDAV)** - WebDAV 协议
 - [x] **[SMB/CIFS](https://en.wikipedia.org/wiki/Server_Message_Block)** - Windows 网络共享（原生支持）
 - [x] **[S3](https://aws.amazon.com/s3)** - Amazon S3 及兼容服务（MinIO、Cloudflare R2 等）
+- [ ] **[115网盘](https://115.com)** - 115云盘（开发中）
 
 ### 🎯 核心功能
 

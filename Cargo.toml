@@ -1,6 +1,6 @@
 [package]
 name = "yaolist-backend"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 
 [dependencies]
@@ -62,6 +62,9 @@ ftp-rs = "0.2.0"
 captcha = "0.0.9"
 rsa = "0.9"
 aes = "0.8"
+cbc = "0.1"
+p256 = { version = "0.13", features = ["ecdh"] }
+num-bigint = "0.4"
 spki = "0.7"
 quick-xml = { version = "0.31", features = ["serde", "serialize"] }
 rust-embed = "8.2"

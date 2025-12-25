@@ -345,7 +345,32 @@ pub async fn fs_upload(
             
             // 第一个分片：创建writer并缓存
             if chunk_index == 0 {
-                let writer = driver.open_writer(&actual_path, Some(total_size), None).await
+                // 创建progress callback，driver可用于报告上传进度
+                // 前端传输占40%，driver上传占60%
+                let task_manager_clone = state.task_manager.clone();
+                let task_id_clone = current_task_id.clone();
+                let file_path_clone = batch_file_path.clone();
+                let is_batch = is_batch_task;
+                let ts = total_size;
+                
+                let progress_callback: Option<yaolist_backend::storage::ProgressCallback> = Some(std::sync::Arc::new(move |uploaded: u64, total: u64| {
+                    // uploaded/total 表示driver上传进度，映射到 40%-100%
+                    let ratio = if total > 0 { uploaded as f64 / total as f64 } else { 1.0 };
+                    let progress = (ts as f64 * (0.4 + ratio * 0.6)) as u64;
+                    
+                    let tm = task_manager_clone.clone();
+                    let tid = task_id_clone.clone();
+                    let fp = file_path_clone.clone();
+                    tokio::spawn(async move {
+                        if is_batch {
+                            tm.update_file_progress(&tid, &fp, progress, None).await;
+                        } else {
+                            tm.update_progress(&tid, progress).await;
+                        }
+                    });
+                }));
+                
+                let writer = driver.open_writer(&actual_path, Some(total_size), progress_callback).await
                     .map_err(|e| {
                         tracing::error!("open_writer failed: {}", e);
                         StatusCode::INTERNAL_SERVER_ERROR
@@ -377,16 +402,18 @@ pub async fn fs_upload(
             
             drop(data);
             
-            // 更新进度
+            // 更新进度：前端传输占40%，driver上传占60%
+            // processed / total_size 映射到 0-40%
+            let front_progress = ((processed as f64 / total_size as f64) * 0.4 * total_size as f64) as u64;
             if is_batch_task {
                 state.task_manager.update_file_progress(
                     &current_task_id, 
                     &batch_file_path, 
-                    processed.min(total_size),
+                    front_progress.min((total_size as f64 * 0.4) as u64),
                     Some(chunk_index as u32)
                 ).await;
             } else {
-                state.task_manager.update_progress(&current_task_id, processed.min(total_size)).await;
+                state.task_manager.update_progress(&current_task_id, front_progress.min((total_size as f64 * 0.4) as u64)).await;
             }
             
             // 最后一个分片：关闭writer并清理
