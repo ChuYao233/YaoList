@@ -26,6 +26,8 @@
 - [x] **[WebDAV](https://en.wikipedia.org/wiki/WebDAV)** - WebDAVプロトコル
 - [x] **[SMB/CIFS](https://en.wikipedia.org/wiki/Server_Message_Block)** - Windows ネットワーク共有（ネイティブサポート）
 - [x] **[S3](https://aws.amazon.com/s3)** - Amazon S3 および互換サービス（MinIO、Cloudflare R2など）
+- [x] **[PikPak](https://mypikpak.com)** - PikPakクラウドドライブ
+- [x] **[Yun139](https://yun.139.com)** - 中国移動クラウド（個人用・家族用）
 - [ ] **[115 Cloud](https://115.com)** - 115クラウドドライブ（開発中）
 
 ### 🎯 コア機能
