@@ -151,7 +151,7 @@ install_yaolist() {
         ip=$(hostname -I 2>/dev/null | awk '{print $1}')
         info "访问地址: http://${ip:-localhost}:8180"
         echo ""
-        admin_pass=$(grep -o 'password: [^ ]*' "${LOG_FILE}" 2>/dev/null | tail -1 | awk '{print $2}')
+        admin_pass=$(grep -o 'Password: [^ ]*' "${LOG_FILE}" 2>/dev/null | tail -1 | awk '{print $2}')
         if [ -n "$admin_pass" ]; then
             success "管理员账号: admin"
             success "管理员密码: ${admin_pass}"
