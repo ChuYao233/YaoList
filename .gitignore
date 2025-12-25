@@ -33,3 +33,6 @@ config.json
 # Scripts (only keep install.sh)
 /scripts/*
 !/scripts/install.sh
+
+# Build scripts
+*.cmd
