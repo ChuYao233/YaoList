@@ -18,6 +18,7 @@
 
 - [x] **Local Storage** - Local file system
 - [x] **[OneDrive](https://www.microsoft.com/en-us/microsoft-365/onedrive/online-cloud-storage)** - Microsoft OneDrive (Personal & Business)
+- [x] **[OneDrive App](https://www.microsoft.com/en-us/microsoft-365/onedrive/online-cloud-storage)** - Microsoft OneDrive App Mode (client_credentials OAuth, supports streaming upload)
 - [x] **[189 Cloud](https://cloud.189.cn)** - China Telecom Cloud (Personal & Family)
 - [x] **[123pan](https://www.123pan.com)** - 123 Cloud Drive (Open API)
 - [x] **[Quark](https://pan.quark.cn)** - Quark Cloud Drive
