@@ -27,6 +27,7 @@
 - [x] **[S3](https://aws.amazon.com/s3)** - Amazon S3 及兼容服务（MinIO、Cloudflare R2 等）
 - [x] **[PikPak](https://mypikpak.com)** - PikPak 网盘
 - [x] **[移动云盘](https://yun.139.com)** - 中国移动云盘（个人版和家庭版）
+- [x] **[SFTP](https://en.wikipedia.org/wiki/SSH_File_Transfer_Protocol)** - SSH 文件传输协议
 - [ ] **[115网盘](https://115.com)** - 115云盘（开发中）
 
 ### 🎯 核心功能

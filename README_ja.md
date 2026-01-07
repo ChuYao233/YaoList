@@ -28,6 +28,7 @@
 - [x] **[S3](https://aws.amazon.com/s3)** - Amazon S3 および互換サービス（MinIO、Cloudflare R2など）
 - [x] **[PikPak](https://mypikpak.com)** - PikPakクラウドドライブ
 - [x] **[Yun139](https://yun.139.com)** - 中国移動クラウド（個人用・家族用）
+- [x] **[SFTP](https://en.wikipedia.org/wiki/SSH_File_Transfer_Protocol)** - SSHファイル転送プロトコル
 - [ ] **[115 Cloud](https://115.com)** - 115クラウドドライブ（開発中）
 
 ### 🎯 コア機能

@@ -28,6 +28,7 @@
 - [x] **[S3](https://aws.amazon.com/s3)** - Amazon S3 & Compatible Services (MinIO, Cloudflare R2, etc.)
 - [x] **[PikPak](https://mypikpak.com)** - PikPak Cloud Drive
 - [x] **[Yun139](https://yun.139.com)** - China Mobile Cloud (Personal & Family)
+- [x] **[SFTP](https://en.wikipedia.org/wiki/SSH_File_Transfer_Protocol)** - SSH File Transfer Protocol
 - [ ] **[115 Cloud](https://115.com)** - 115 Cloud Drive (In Development)
 
 ### 🎯 Core Features
