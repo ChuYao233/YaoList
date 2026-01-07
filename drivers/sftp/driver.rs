@@ -11,6 +11,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::TcpStream;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -337,6 +338,7 @@ impl StorageDriver for SftpDriver {
             can_server_side_copy: false,
             can_batch_operations: false,
             max_file_size: None,
+            requires_full_file_for_upload: false, // SFTP支持流式写入
         }
     }
 
@@ -625,8 +627,12 @@ impl AsyncRead for SftpStreamReader {
 /// SFTP 异步写入器（channel 桥接）
 struct SftpStreamWriter {
     tx: Option<mpsc::Sender<Vec<u8>>>,
-    handle: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    handle: Option<std::thread::JoinHandle<std::io::Result<u64>>>, // 返回实际写入的字节数
+    join_task: Option<tokio::task::JoinHandle<std::io::Result<u64>>>,
     closed: bool,
+    size_hint: Option<u64>, // 用于验证写入完整性
+    written_bytes: u64, // 跟踪已发送到 channel 的字节数
+    pending_send: Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), tokio::sync::mpsc::error::SendError<Vec<u8>>>> + Send>>>, // 待发送的 future
 }
 
 impl SftpStreamWriter {
@@ -636,10 +642,12 @@ impl SftpStreamWriter {
         size_hint: Option<u64>,
         progress: Option<ProgressCallback>,
     ) -> Result<Self> {
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
+        // 增加 channel 容量，减少阻塞（从 32 增加到 128）
+        // 这样可以缓冲更多数据，避免频繁阻塞和 panic
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(128);
         let progress_cb = progress.clone();
 
-        let handle = std::thread::spawn(move || -> std::io::Result<()> {
+        let handle = std::thread::spawn(move || -> std::io::Result<u64> {
             let (_session, sftp) = SftpDriver::new(config)
                 .connect()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -657,25 +665,54 @@ impl SftpStreamWriter {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
             let mut written: u64 = 0;
-            while let Some(chunk) = rx.blocking_recv() {
-                file.write_all(&chunk)?;
-                written += chunk.len() as u64;
-                if let Some(cb) = progress_cb.as_ref() {
-                    cb(written, size_hint.unwrap_or(written));
+            loop {
+                match rx.blocking_recv() {
+                    Some(chunk) => {
+                        let chunk_len = chunk.len();
+                        file.write_all(&chunk).map_err(|e| {
+                            tracing::error!("SFTP writer: 写入失败: {} (已写入: {} bytes)", e, written);
+                            std::io::Error::new(std::io::ErrorKind::Other, format!("写入失败: {}", e))
+                        })?;
+                        written += chunk_len as u64;
+                        if let Some(cb) = progress_cb.as_ref() {
+                            cb(written, size_hint.unwrap_or(written));
+                        }
+                        tracing::trace!("SFTP writer: 写入分片: {} bytes, 总计: {} bytes", chunk_len, written);
+                    }
+                    None => {
+                        // channel 已关闭，所有数据已接收完成
+                        tracing::debug!("SFTP writer: 所有数据已接收，开始 flush，已写入: {} bytes (期望: {:?})", 
+                            written, size_hint);
+                        break;
+                    }
                 }
             }
-            file.flush()?;
-            Ok(())
+            // 确保所有数据都写入并刷新
+            file.flush().map_err(|e| {
+                tracing::error!("SFTP writer: flush 失败: {} (已写入: {} bytes)", e, written);
+                std::io::Error::new(std::io::ErrorKind::Other, format!("flush 失败: {}", e))
+            })?;
+            tracing::debug!("SFTP writer: flush 完成，文件写入成功，总计: {} bytes (期望: {:?})", 
+                written, size_hint);
+            Ok(written)
         });
 
-        Ok(Self { tx: Some(tx), handle: Some(handle), closed: false })
+        Ok(Self { 
+            tx: Some(tx), 
+            handle: Some(handle), 
+            join_task: None,
+            closed: false,
+            size_hint,
+            written_bytes: 0,
+            pending_send: None,
+        })
     }
 }
 
 impl AsyncWrite for SftpStreamWriter {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         if self.closed {
@@ -684,18 +721,59 @@ impl AsyncWrite for SftpStreamWriter {
                 "writer already closed",
             )));
         }
-        let tx = self.tx.as_ref().expect("sender should exist");
+        
+        // 如果有待发送的数据，先处理它
+        if let Some(mut send_fut) = self.pending_send.take() {
+            match send_fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(_)) => {
+                    // 之前的发送成功，现在可以发送新数据
+                }
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        format!("SFTP 发送失败: {}", e),
+                    )));
+                }
+                Poll::Pending => {
+                    // 之前的发送还在等待，保存 future 并返回 Pending
+                    self.pending_send = Some(send_fut);
+                    return Poll::Pending;
+                }
+            }
+        }
+        
+        // 克隆 tx 以避免借用检查问题
+        let tx = self.tx.as_ref().expect("sender should exist").clone();
+        let buf_len = buf.len();
+        let data = buf.to_vec();
 
-        match tx.try_send(buf.to_vec()) {
-            Ok(_) => Poll::Ready(Ok(buf.len())),
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                // channel 满，降级为阻塞发送
-                match tx.blocking_send(buf.to_vec()) {
-                    Ok(_) => Poll::Ready(Ok(buf.len())),
-                    Err(e) => Poll::Ready(Err(std::io::Error::new(
+        match tx.try_send(data) {
+            Ok(_) => {
+                self.written_bytes += buf_len as u64;
+                Poll::Ready(Ok(buf_len))
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(data)) => {
+                // channel 满，使用异步 send 等待，避免阻塞 Tokio 运行时
+                // 使用 async move 确保 future 拥有 tx 和 data 的所有权
+                let send_fut = async move {
+                    tx.send(data).await
+                };
+                let mut boxed_fut: Pin<Box<dyn std::future::Future<Output = Result<(), tokio::sync::mpsc::error::SendError<Vec<u8>>>> + Send>> = Box::pin(send_fut);
+                
+                match boxed_fut.as_mut().poll(cx) {
+                    Poll::Ready(Ok(_)) => {
+                        self.written_bytes += buf_len as u64;
+                        Poll::Ready(Ok(buf_len))
+                    }
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::new(
                         std::io::ErrorKind::BrokenPipe,
                         format!("SFTP 发送失败: {}", e),
                     ))),
+                    Poll::Pending => {
+                        // 保存 future 以便下次继续轮询
+                        self.pending_send = Some(boxed_fut);
+                        Poll::Pending
+                    }
                 }
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Poll::Ready(Err(
@@ -713,28 +791,116 @@ impl AsyncWrite for SftpStreamWriter {
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<std::io::Result<()>> {
         if !self.closed {
             self.closed = true;
+            tracing::debug!("SFTP writer: 开始 shutdown，关闭 channel");
             if let Some(tx) = self.tx.take() {
                 drop(tx); // dropping sender closes the channel
             }
             if let Some(handle) = self.handle.take() {
-                match handle.join() {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Poll::Ready(Err(e)),
-                    Err(e) => {
-                        tracing::error!("SFTP writer join error: {:?}", e);
-                        return Poll::Ready(Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "writer thread panicked",
-                        )));
+                tracing::debug!("SFTP writer: 启动 join task 等待线程完成");
+                // 使用 spawn_blocking 异步等待线程完成，避免阻塞 Tokio 运行时
+                let size_hint = self.size_hint;
+                let written_bytes = self.written_bytes;
+                let join_task = tokio::task::spawn_blocking(move || {
+                    tracing::debug!("SFTP writer: join task 开始等待线程 (已发送: {} bytes, 期望: {:?})", 
+                        written_bytes, size_hint);
+                    match handle.join() {
+                        Ok(result) => {
+                            match &result {
+                                Ok(actual_written) => {
+                                    tracing::debug!("SFTP writer: 线程完成，实际写入: {} bytes (期望: {:?}, 已发送: {} bytes)", 
+                                        actual_written, size_hint, written_bytes);
+                                }
+                                Err(e) => {
+                                    tracing::error!("SFTP writer: 线程返回错误: {} (已发送: {} bytes, 期望: {:?})", 
+                                        e, written_bytes, size_hint);
+                                }
+                            }
+                            result
+                        }
+                        Err(e) => {
+                            tracing::error!("SFTP writer join error: {:?} (已发送: {} bytes, 期望: {:?})", 
+                                e, written_bytes, size_hint);
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "writer thread panicked",
+                            ))
+                        }
                     }
-                };
+                });
+                self.join_task = Some(join_task);
             }
         }
-        Poll::Ready(Ok(()))
+        
+        // 如果有等待任务，检查是否完成
+        if let Some(ref mut join_task) = self.join_task {
+            match Pin::new(join_task).poll(cx) {
+                Poll::Ready(Ok(result)) => {
+                    self.join_task = None;
+                    // 验证写入完整性
+                    match result {
+                        Ok(actual_written) => {
+                            // 验证实际写入的字节数
+                            if let Some(expected_size) = self.size_hint {
+                                if expected_size > 0 {
+                                    if actual_written < expected_size {
+                                        // 实际写入小于期望大小，这是真正的错误（写入不完整）
+                                        tracing::error!(
+                                            "SFTP writer: 写入不完整！实际写入: {} bytes, 期望: {} bytes, 已发送: {} bytes",
+                                            actual_written, expected_size, self.written_bytes
+                                        );
+                                        return Poll::Ready(Err(std::io::Error::new(
+                                            std::io::ErrorKind::UnexpectedEof,
+                                            format!("写入不完整: 实际 {} bytes, 期望 {} bytes", actual_written, expected_size),
+                                        )));
+                                    } else if actual_written > expected_size {
+                                        // 实际写入大于期望大小，可能是前端传递的大小不准确，警告但不报错
+                                        tracing::warn!(
+                                            "SFTP writer: 实际写入 ({}) 大于期望大小 ({})，可能是前端传递的大小不准确 (已发送: {} bytes)",
+                                            actual_written, expected_size, self.written_bytes
+                                        );
+                                    }
+                                }
+                            }
+                            // 验证已发送的字节数是否与实际写入一致（允许一些差异，因为可能有缓冲）
+                            if actual_written > self.written_bytes + 1024 * 1024 {
+                                // 如果实际写入比已发送多超过 1MB，可能是问题
+                                tracing::warn!(
+                                    "SFTP writer: 实际写入 ({}) 比已发送 ({}) 多很多，可能存在异常",
+                                    actual_written, self.written_bytes
+                                );
+                            }
+                            tracing::debug!("SFTP writer: shutdown 完成，验证通过 (实际写入: {} bytes)", actual_written);
+                            Poll::Ready(Ok(()))
+                        }
+                        Err(e) => {
+                            tracing::error!("SFTP writer: shutdown 失败: {} (已发送: {} bytes, 期望: {:?})", 
+                                e, self.written_bytes, self.size_hint);
+                            Poll::Ready(Err(e))
+                        }
+                    }
+                }
+                Poll::Ready(Err(e)) => {
+                    self.join_task = None;
+                    tracing::error!("SFTP writer join task error: {:?} (已发送: {} bytes, 期望: {:?})", 
+                        e, self.written_bytes, self.size_hint);
+                    Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("join task failed: {}", e),
+                    )))
+                }
+                Poll::Pending => {
+                    tracing::debug!("SFTP writer: shutdown 等待中... (已发送: {} bytes, 期望: {:?})", 
+                        self.written_bytes, self.size_hint);
+                    Poll::Pending
+                }
+            }
+        } else {
+            Poll::Ready(Ok(()))
+        }
     }
 }
 

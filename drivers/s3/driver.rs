@@ -195,6 +195,7 @@ impl StorageDriver for S3Driver {
             can_server_side_copy: true,
             can_batch_operations: true,
             max_file_size: None,
+            requires_full_file_for_upload: false, // S3支持流式写入
         }
     }
     

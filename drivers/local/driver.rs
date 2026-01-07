@@ -64,6 +64,7 @@ impl StorageDriver for LocalDriver {
             can_server_side_copy: true,
             can_batch_operations: true,
             max_file_size: None,
+            requires_full_file_for_upload: false, // 本地存储支持流式写入
         }
     }
     

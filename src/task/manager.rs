@@ -116,6 +116,8 @@ impl TaskManager {
                     items,
                     conflict_strategy,
                     last_saved: None,
+                    last_speed_update_time: None,
+                    last_speed_processed_size: 0,
                 };
                 tasks.insert(id, task);
             }
@@ -275,16 +277,62 @@ impl TaskManager {
                 task.progress = (processed_size as f32 / total_size as f32) * 100.0;
             }
             
-            // 计算速度和ETA
-            if let Some(started_at) = &task.started_at {
-                let elapsed_secs = (chrono::Utc::now() - *started_at).num_seconds() as f64;
-                if elapsed_secs > 0.0 {
-                    task.speed = processed_size as f64 / elapsed_secs;
-                    if task.speed > 0.0 && total_size > processed_size {
-                        let remaining = total_size - processed_size;
-                        task.eta_seconds = Some((remaining as f64 / task.speed) as u64);
+            // 计算瞬时速度（使用滑动窗口，基于最近3-5秒的数据）
+            let now = Utc::now();
+            let speed = if let Some(last_update) = task.last_speed_update_time {
+                let time_diff_ms = now.signed_duration_since(last_update).num_milliseconds();
+                let time_diff_secs = time_diff_ms as f64 / 1000.0;
+                
+                // 如果距离上次更新超过1秒，计算瞬时速度
+                if time_diff_secs >= 1.0 {
+                    let size_diff = processed_size.saturating_sub(task.last_speed_processed_size);
+                    let instant_speed = size_diff as f64 / time_diff_secs;
+                    
+                    // 更新速度跟踪
+                    task.last_speed_update_time = Some(now);
+                    task.last_speed_processed_size = processed_size;
+                    
+                    // 如果瞬时速度有效，使用它；否则使用平均速度作为后备
+                    if instant_speed > 0.0 {
+                        instant_speed
+                    } else if let Some(started_at) = &task.started_at {
+                        let elapsed_secs = (now - *started_at).num_seconds() as f64;
+                        if elapsed_secs > 0.0 {
+                            processed_size as f64 / elapsed_secs
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
                     }
+                } else {
+                    // 时间间隔太短，保持当前速度
+                    task.speed
                 }
+            } else {
+                // 首次更新，初始化速度跟踪
+                task.last_speed_update_time = Some(now);
+                task.last_speed_processed_size = processed_size;
+                
+                // 使用平均速度
+                if let Some(started_at) = &task.started_at {
+                    let elapsed_secs = (now - *started_at).num_seconds() as f64;
+                    if elapsed_secs > 0.0 {
+                        processed_size as f64 / elapsed_secs
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            };
+            
+            task.speed = speed;
+            
+            // 计算ETA
+            if task.speed > 0.0 && total_size > processed_size {
+                let remaining = total_size - processed_size;
+                task.eta_seconds = Some((remaining as f64 / task.speed) as u64);
             }
             
             // 定期保存到数据库（每5秒一次）
@@ -319,16 +367,62 @@ impl TaskManager {
                 task.current_file = Some(cf);
             }
             
-            // 计算速度和ETA
-            if let Some(started_at) = &task.started_at {
-                let elapsed_secs = (chrono::Utc::now() - *started_at).num_seconds() as f64;
-                if elapsed_secs > 0.0 {
-                    task.speed = processed_size as f64 / elapsed_secs;
-                    if task.speed > 0.0 && task.total_size > processed_size {
-                        let remaining = task.total_size - processed_size;
-                        task.eta_seconds = Some((remaining as f64 / task.speed as f64) as u64);
+            // 计算瞬时速度（使用滑动窗口，基于最近3-5秒的数据）
+            let now = Utc::now();
+            let speed = if let Some(last_update) = task.last_speed_update_time {
+                let time_diff_ms = now.signed_duration_since(last_update).num_milliseconds();
+                let time_diff_secs = time_diff_ms as f64 / 1000.0;
+                
+                // 如果距离上次更新超过1秒，计算瞬时速度
+                if time_diff_secs >= 1.0 {
+                    let size_diff = processed_size.saturating_sub(task.last_speed_processed_size);
+                    let instant_speed = size_diff as f64 / time_diff_secs;
+                    
+                    // 更新速度跟踪
+                    task.last_speed_update_time = Some(now);
+                    task.last_speed_processed_size = processed_size;
+                    
+                    // 如果瞬时速度有效，使用它；否则使用平均速度作为后备
+                    if instant_speed > 0.0 {
+                        instant_speed
+                    } else if let Some(started_at) = &task.started_at {
+                        let elapsed_secs = (now - *started_at).num_seconds() as f64;
+                        if elapsed_secs > 0.0 {
+                            processed_size as f64 / elapsed_secs
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
                     }
+                } else {
+                    // 时间间隔太短，保持当前速度
+                    task.speed
                 }
+            } else {
+                // 首次更新，初始化速度跟踪
+                task.last_speed_update_time = Some(now);
+                task.last_speed_processed_size = processed_size;
+                
+                // 使用平均速度
+                if let Some(started_at) = &task.started_at {
+                    let elapsed_secs = (now - *started_at).num_seconds() as f64;
+                    if elapsed_secs > 0.0 {
+                        processed_size as f64 / elapsed_secs
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            };
+            
+            task.speed = speed;
+            
+            // 计算ETA
+            if task.speed > 0.0 && task.total_size > processed_size {
+                let remaining = task.total_size - processed_size;
+                task.eta_seconds = Some((remaining as f64 / task.speed) as u64);
             }
             
             // 定期保存到数据库（每5秒一次）
@@ -440,19 +534,60 @@ impl TaskManager {
     pub async fn update_progress(&self, task_id: &str, processed_size: u64) {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(task_id) {
-            // 计算速度（基于开始时间）
-            let speed = if let Some(started_at) = task.started_at {
-                let elapsed = Utc::now().signed_duration_since(started_at).num_milliseconds() as f64 / 1000.0;
-                if elapsed > 0.0 {
-                    processed_size as f64 / elapsed
+            // 确保进度只增不减，避免进度倒退
+            let actual_processed_size = processed_size.max(task.processed_size);
+            
+            // 计算瞬时速度（使用滑动窗口，基于最近3-5秒的数据）
+            let now = Utc::now();
+            let speed = if let Some(last_update) = task.last_speed_update_time {
+                let time_diff_ms = now.signed_duration_since(last_update).num_milliseconds();
+                let time_diff_secs = time_diff_ms as f64 / 1000.0;
+                
+                // 如果距离上次更新超过1秒，计算瞬时速度
+                if time_diff_secs >= 1.0 {
+                    let size_diff = actual_processed_size.saturating_sub(task.last_speed_processed_size);
+                    let instant_speed = size_diff as f64 / time_diff_secs;
+                    
+                    // 更新速度跟踪
+                    task.last_speed_update_time = Some(now);
+                    task.last_speed_processed_size = actual_processed_size;
+                    
+                    // 如果瞬时速度有效，使用它；否则使用平均速度作为后备
+                    if instant_speed > 0.0 {
+                        instant_speed
+                    } else if let Some(started_at) = task.started_at {
+                        let elapsed = now.signed_duration_since(started_at).num_milliseconds() as f64 / 1000.0;
+                        if elapsed > 0.0 {
+                            actual_processed_size as f64 / elapsed
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    }
+                } else {
+                    // 时间间隔太短，保持当前速度
+                    task.speed
+                }
+            } else {
+                // 首次更新，初始化速度跟踪
+                task.last_speed_update_time = Some(now);
+                task.last_speed_processed_size = actual_processed_size;
+                
+                // 使用平均速度
+                if let Some(started_at) = task.started_at {
+                    let elapsed = now.signed_duration_since(started_at).num_milliseconds() as f64 / 1000.0;
+                    if elapsed > 0.0 {
+                        actual_processed_size as f64 / elapsed
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 }
-            } else {
-                0.0
             };
             
-            task.processed_size = processed_size;
+            task.processed_size = actual_processed_size;
             task.speed = speed;
             if task.total_size > 0 {
                 task.progress = (processed_size as f32 / task.total_size as f32) * 100.0;
@@ -811,13 +946,16 @@ impl TaskManager {
                 });
                 
                 if let Some(file) = file_opt {
-                    file.uploaded_size = uploaded_size;
+                    // 确保进度只增不减，避免进度倒退
+                    if uploaded_size > file.uploaded_size {
+                        file.uploaded_size = uploaded_size;
+                    }
                     if let Some(chunk) = chunk_index {
                         if !file.uploaded_chunks.contains(&chunk) {
                             file.uploaded_chunks.push(chunk);
                         }
                     }
-                    tracing::debug!("File progress updated: task={}, file={}, uploaded={}", task_id, file_path, uploaded_size);
+                    tracing::debug!("File progress updated: task={}, file={}, uploaded={}", task_id, file_path, file.uploaded_size);
                 } else {
                     tracing::warn!("File not found: task={}, file_path={}, files={:?}", 
                         task_id, file_path, files.iter().map(|f| &f.path).collect::<Vec<_>>());
@@ -828,15 +966,63 @@ impl TaskManager {
                 task.processed_size = total_uploaded;
             }
             
-            // 计算速度和ETA
-            if let Some(started_at) = task.started_at {
-                let elapsed = Utc::now().signed_duration_since(started_at).num_milliseconds() as f64 / 1000.0;
-                if elapsed > 0.0 {
-                    task.speed = task.processed_size as f64 / elapsed;
-                    if task.speed > 0.0 && task.total_size > task.processed_size {
-                        let remaining = task.total_size - task.processed_size;
-                        task.eta_seconds = Some((remaining as f64 / task.speed) as u64);
+            // 计算瞬时速度（使用滑动窗口，基于最近3-5秒的数据）
+            let now = Utc::now();
+            let speed = if let Some(last_update) = task.last_speed_update_time {
+                let time_diff_ms = now.signed_duration_since(last_update).num_milliseconds();
+                let time_diff_secs = time_diff_ms as f64 / 1000.0;
+                
+                // 如果距离上次更新超过1秒，计算瞬时速度
+                if time_diff_secs >= 1.0 {
+                    let size_diff = task.processed_size.saturating_sub(task.last_speed_processed_size);
+                    let instant_speed = size_diff as f64 / time_diff_secs;
+                    
+                    // 更新速度跟踪
+                    task.last_speed_update_time = Some(now);
+                    task.last_speed_processed_size = task.processed_size;
+                    
+                    // 如果瞬时速度有效，使用它；否则使用平均速度作为后备
+                    if instant_speed > 0.0 {
+                        instant_speed
+                    } else if let Some(started_at) = task.started_at {
+                        let elapsed = now.signed_duration_since(started_at).num_milliseconds() as f64 / 1000.0;
+                        if elapsed > 0.0 {
+                            task.processed_size as f64 / elapsed
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
                     }
+                } else {
+                    // 时间间隔太短，保持当前速度
+                    task.speed
+                }
+            } else {
+                // 首次更新，初始化速度跟踪
+                task.last_speed_update_time = Some(now);
+                task.last_speed_processed_size = task.processed_size;
+                
+                // 使用平均速度
+                if let Some(started_at) = task.started_at {
+                    let elapsed = now.signed_duration_since(started_at).num_milliseconds() as f64 / 1000.0;
+                    if elapsed > 0.0 {
+                        task.processed_size as f64 / elapsed
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            };
+            
+            task.speed = speed;
+            
+            // 计算ETA
+            if let Some(started_at) = task.started_at {
+                if task.speed > 0.0 && task.total_size > task.processed_size {
+                    let remaining = task.total_size - task.processed_size;
+                    task.eta_seconds = Some((remaining as f64 / task.speed) as u64);
                 }
             }
             

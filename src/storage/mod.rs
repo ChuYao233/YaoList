@@ -170,6 +170,8 @@ pub struct Capability {
     pub can_batch_operations: bool,
     /// Maximum file size limit (None means no limit) / 最大文件大小限制
     pub max_file_size: Option<u64>,
+    /// Require complete file data for upload (needs full file MD5, etc.) / 上传需要完整文件数据（需要完整文件MD5等）
+    pub requires_full_file_for_upload: bool,
 }
 
 impl Default for Capability {
@@ -185,6 +187,7 @@ impl Default for Capability {
             can_server_side_copy: false,
             can_batch_operations: false,
             max_file_size: None,
+            requires_full_file_for_upload: false,
         }
     }
 }

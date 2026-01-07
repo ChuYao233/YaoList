@@ -255,7 +255,21 @@ impl AsyncRead for Cloud189Reader { fn poll_read(mut self: Pin<&mut Self>, cx: &
 impl StorageDriver for Cloud189Driver {
     fn name(&self) -> &str { "天翼云盘" }
     fn version(&self) -> &str { "1.0.0" }
-    fn capabilities(&self) -> Capability { Capability { can_range_read: true, can_append: false, can_direct_link: true, max_chunk_size: None, can_concurrent_upload: false, requires_oauth: false, can_multipart_upload: false, can_server_side_copy: false, can_batch_operations: true, max_file_size: None } }
+    fn capabilities(&self) -> Capability {
+        Capability {
+            can_range_read: true,
+            can_append: false,
+            can_direct_link: true,
+            max_chunk_size: None,
+            can_concurrent_upload: false,
+            requires_oauth: false,
+            can_multipart_upload: false,
+            can_server_side_copy: false,
+            can_batch_operations: true,
+            max_file_size: None,
+            requires_full_file_for_upload: false,
+        }
+    }
 
     async fn list(&self, path: &str) -> Result<Vec<Entry>> {
         self.ensure_authenticated().await?;
@@ -287,7 +301,7 @@ impl StorageDriver for Cloud189Driver {
         Ok(Box::new(Cloud189Reader::new(&url, range.map(|r| (r.start, r.end.saturating_sub(1)))).await?))
     }
 
-    async fn open_writer(&self, path: &str, size_hint: Option<u64>, _progress: Option<crate::storage::ProgressCallback>) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn open_writer(&self, path: &str, size_hint: Option<u64>, progress: Option<crate::storage::ProgressCallback>) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         self.ensure_authenticated().await?;
         
         // Parse path to get parent folder ID and filename / 解析路径获取
@@ -315,6 +329,7 @@ impl StorageDriver for Cloud189Driver {
             parent_folder_id,
             file_name.to_string(),
             size_hint,
+            progress,
         )))
     }
 

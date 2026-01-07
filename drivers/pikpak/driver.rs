@@ -265,6 +265,7 @@ impl StorageDriver for PikPakDriver {
             can_server_side_copy: true,
             can_batch_operations: true,
             max_file_size: None,
+            requires_full_file_for_upload: false, // PikPak支持分片上传
         }
     }
 

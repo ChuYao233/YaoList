@@ -588,6 +588,7 @@ impl StorageDriver for Yun139Driver {
             can_server_side_copy: false,
             can_batch_operations: false,
             max_file_size: None,
+            requires_full_file_for_upload: false, // 天翼云支持流式写入
         }
     }
 

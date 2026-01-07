@@ -17,6 +17,7 @@
 
 - [x] **ローカルストレージ** - ローカルファイルシステム
 - [x] **[OneDrive](https://www.microsoft.com/en-us/microsoft-365/onedrive/online-cloud-storage)** - Microsoft OneDrive（個人用・ビジネス用）
+- [x] **[OneDrive App](https://www.microsoft.com/en-us/microsoft-365/onedrive/online-cloud-storage)** - Microsoft OneDrive アプリモード（client_credentials OAuth、ストリーミングアップロード対応）
 - [x] **[Aliyundrive](https://www.alipan.com)** - アリババクラウドドライブ
 - [x] **[189 Cloud](https://cloud.189.cn)** - 中国電信クラウド（個人用・家族用）
 - [x] **[123pan](https://www.123pan.com)** - 123クラウドドライブ（Open API）

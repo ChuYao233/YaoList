@@ -173,6 +173,7 @@ impl StorageDriver for Pan123OpenDriver {
             can_server_side_copy: true, // 支持秒传复制 / Supports instant copy
             can_batch_operations: true,
             max_file_size: None,
+            requires_full_file_for_upload: true, // 需要完整文件MD5进行秒传
         }
     }
 

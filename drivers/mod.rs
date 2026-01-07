@@ -1,6 +1,7 @@
 // Driver package / 驱动包
 pub mod local;
 pub mod onedrive;
+pub mod onedrive_app;
 pub mod quark;
 pub mod ftp;
 pub mod cloud189;
@@ -23,6 +24,8 @@ pub async fn register_all(manager: &StorageManager) -> anyhow::Result<()> {
     manager.register_factory(Box::new(crate::storage::LocalDriverFactory)).await?;
     // Register OneDrive driver (OAuth refresh_token method) / 注册OneDrive驱动
     manager.register_factory(Box::new(onedrive::OneDriveDriverFactory)).await?;
+    // Register OneDrive App driver (client_credentials method) / 注册OneDrive App驱动
+    manager.register_factory(Box::new(onedrive_app::OneDriveAppDriverFactory)).await?;
     // Register Quark cloud drive driver / 注册夸克网盘驱动
     manager.register_factory(Box::new(quark::QuarkDriverFactory)).await?;
     // Register FTP driver / 注册FTP驱动

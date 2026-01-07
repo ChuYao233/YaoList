@@ -178,6 +178,7 @@ fn onedrive_capability() -> Capability {
         can_server_side_copy: true,
         can_batch_operations: false,
         max_file_size: Some(250 * 1024 * 1024 * 1024), // 250GB
+        requires_full_file_for_upload: false, // OneDrive支持流式写入
     }
 }
 

@@ -181,6 +181,7 @@ impl StorageDriver for SmbDriver {
             can_server_side_copy: true,
             can_batch_operations: true,
             max_file_size: None,
+            requires_full_file_for_upload: false, // SMB支持流式写入
         }
     }
     

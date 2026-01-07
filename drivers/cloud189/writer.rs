@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use super::types::*;
 use super::utils::*;
 use super::upload::calculate_slice_md5;
+use crate::storage::ProgressCallback;
 
 /// Chunk size 10MiB (Cloud189 requirement) / 分片大小
 const DEFAULT_SLICE_SIZE: usize = 10 * 1024 * 1024;
@@ -41,6 +42,10 @@ struct UploadState {
     error: StdMutex<Option<String>>,
     /// Total chunk count (set on shutdown) / 总分片数
     total_parts: AtomicI32,
+    /// Total file size / 文件总大小
+    total_size: AtomicU64,
+    /// Progress callback / 进度回调
+    progress_callback: StdMutex<Option<ProgressCallback>>,
 }
 
 /// Cloud189 streaming upload Writer / 天翼云盘流式上传Writer
@@ -88,6 +93,7 @@ impl Cloud189StreamWriter {
         parent_folder_id: String,
         file_name: String,
         file_size: Option<u64>,
+        progress_callback: Option<ProgressCallback>,
     ) -> Self {
         let total_size = file_size.unwrap_or(0);
         let slice_size = if total_size > 0 {
@@ -105,6 +111,8 @@ impl Cloud189StreamWriter {
             uploaded_md5s: StdMutex::new(Vec::new()),
             error: StdMutex::new(None),
             total_parts: AtomicI32::new(0),
+            total_size: AtomicU64::new(total_size),
+            progress_callback: StdMutex::new(progress_callback),
         });
 
         // 创建后台上传任务通道（std::sync::mpsc是无界的）
@@ -233,10 +241,16 @@ async fn upload_worker(
                     md5s.push((task.part_number, md5));
                 }
                 state.completed_parts.fetch_add(1, Ordering::SeqCst);
-                state.uploaded_bytes.fetch_add(chunk_len, Ordering::SeqCst);
+                let uploaded_bytes = state.uploaded_bytes.fetch_add(chunk_len, Ordering::SeqCst) + chunk_len;
+                let total_size = state.total_size.load(Ordering::SeqCst);
+                
+                // 调用进度回调
+                if let Some(ref callback) = *state.progress_callback.lock().unwrap() {
+                    callback(uploaded_bytes, total_size);
+                }
                 
                 tracing::debug!("cloud189: 已上传分片 {}, 已上传 {} 字节", 
-                    task.part_number, state.uploaded_bytes.load(Ordering::SeqCst));
+                    task.part_number, uploaded_bytes);
             }
             Err(e) => {
                 let mut error = state.error.lock().unwrap();

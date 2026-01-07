@@ -225,6 +225,7 @@ impl StorageDriver for WebDavDriver {
             can_server_side_copy: true,
             can_batch_operations: false,
             max_file_size: None,
+            requires_full_file_for_upload: false, // WebDAV支持流式上传
         }
     }
     

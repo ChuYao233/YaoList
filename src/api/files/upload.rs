@@ -10,7 +10,6 @@ use serde_json::{json, Value};
 use tower_cookies::Cookies;
 use tokio::sync::RwLock;
 use tokio::io::AsyncWrite;
-use futures::StreamExt;
 
 use crate::state::AppState;
 use crate::task::{TaskType, TaskStatus, UploadFileInfo};
@@ -18,6 +17,30 @@ use crate::api::file_resolver::{MountInfo, get_first_mount};
 use yaolist_backend::utils::{fix_and_clean_path, resolve_conflict_name, ConflictStrategy};
 
 use super::{get_user_context, join_user_path, get_user_id};
+
+/// 安全地执行进度更新任务
+/// 如果当前在 Tokio 运行时中，直接 spawn；否则使用 channel 发送到主运行时
+fn safe_spawn_progress_update<F>(f: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    // 尝试获取当前 Tokio runtime handle
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // 在 Tokio 运行时中，直接 spawn
+        handle.spawn(f);
+    } else {
+        // 不在 Tokio 运行时中（例如在 std::thread 中），创建新的 runtime 来执行
+        // 注意：这可能会创建新的 runtime，但比 panic 好
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new();
+            if let Ok(rt) = rt {
+                rt.block_on(f);
+            } else {
+                tracing::error!("Failed to create runtime for progress update");
+            }
+        });
+    }
+}
 
 /// 全局writer缓存，用于跨请求保持流式写入连接
 /// Key: task_id + filename
@@ -62,8 +85,8 @@ pub async fn fs_upload(
     
     let user_id = get_user_id(&state, &cookies).await;
     
-    // 解析multipart数据
-    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+    // 解析multipart数据 - 先解析元数据字段，保存文件字段稍后处理
+    while let Some(mut field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "path" => target_path = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
@@ -76,37 +99,21 @@ pub async fn fs_upload(
                 if filename.is_empty() {
                     filename = field.file_name().unwrap_or("unknown").to_string();
                 }
-                // 真正的流式读取：每次只缓冲最多1MB，背压控制内存
-                let mut buffer = Vec::with_capacity(STREAM_BUFFER_SIZE);
-                let mut field_stream = field;
-                while let Some(chunk_result) = field_stream.chunk().await.transpose() {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            buffer.extend_from_slice(&chunk);
-                            // 达到缓冲大小时停止，等待写入
-                            if buffer.len() >= STREAM_BUFFER_SIZE {
-                                break;
-                            }
-                        }
+                // 立即读取文件字段数据，避免借用问题
+                let mut data = Vec::new();
+                while let Some(chunk) = field.chunk().await.transpose() {
+                    match chunk {
+                        Ok(c) => data.extend_from_slice(&c),
                         Err(_) => return Err(StatusCode::BAD_REQUEST),
                     }
                 }
-                // 继续读取剩余数据（如果有）
-                while let Some(chunk_result) = field_stream.chunk().await.transpose() {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            buffer.extend_from_slice(&chunk);
-                        }
-                        Err(_) => return Err(StatusCode::BAD_REQUEST),
-                    }
-                }
-                file_data = Some(buffer);
+                file_data = Some(data);
             }
             _ => {}
         }
     }
     
-    let data = file_data.ok_or(StatusCode::BAD_REQUEST)?;
+    let file_data = file_data.ok_or(StatusCode::BAD_REQUEST)?;
     if target_path.is_empty() {
         target_path = "/".to_string();
     }
@@ -222,22 +229,21 @@ pub async fn fs_upload(
     if chunk_index >= 0 && total_chunks > 1 {
         let capabilities = driver.capabilities();
         
-        // 只有需要完整文件MD5的驱动（如123云盘）才缓存本地，其他全部直接put（流式）
-        let needs_local_cache = capabilities.can_multipart_upload;
+        // 根据驱动的能力声明决定上传方式：需要完整文件的驱动使用本地缓存+put方法，其他使用流式写入
+        let needs_local_cache = capabilities.requires_full_file_for_upload;
         
         if needs_local_cache {
+            // 需要本地缓存：使用已读取的文件数据
             // 123云盘等：缓存分片到本地，最后合并调用put（需要完整MD5）
             let temp_dir = std::path::PathBuf::from("data/temps");
             let _ = std::fs::create_dir_all(&temp_dir);
             let chunk_file = temp_dir.join(format!("{}_{}.part{}", current_task_id, filename.replace("/", "_"), chunk_index));
             
-            tokio::fs::write(&chunk_file, &data).await
+            tokio::fs::write(&chunk_file, &file_data).await
                 .map_err(|e| {
                     tracing::error!("write chunk to temp failed: {}", e);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
-            
-            drop(data);
             
             if is_batch_task {
                 state.task_manager.update_file_progress(
@@ -269,18 +275,36 @@ pub async fn fs_upload(
                             merged_data.extend_from_slice(&part_data);
                             let _ = tokio::fs::remove_file(&part_file).await;
                             
+                            // 合并阶段进度：0-50%
                             let progress = ((i + 1) as f64 / total_chunks as f64 * 0.5 * total_size as f64) as u64;
                             if is_batch {
                                 task_manager.update_file_progress(&task_id_clone, &batch_file_path_clone, progress, None).await;
+                            } else {
+                                task_manager.update_progress(&task_id_clone, progress).await;
                             }
                         }
                         
-                        let shared_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-                        let shared_progress_cb = shared_progress.clone();
+                        // 分片上传：合并阶段0-50%，put上传50-100%，都算作"上传到驱动"
+                        let task_manager_put = task_manager.clone();
+                        let task_id_put = task_id_clone.clone();
+                        let batch_file_path_put = batch_file_path_clone.clone();
+                        let is_batch_put = is_batch;
                         let ts = total_size;
                         let progress_callback: Option<yaolist_backend::storage::ProgressCallback> = Some(std::sync::Arc::new(move |completed: u64, _total: u64| {
+                            // put上传进度映射到50-100%
                             let progress = (ts as f64 * 0.5 + completed as f64 * 0.5) as u64;
-                            shared_progress_cb.store(progress, std::sync::atomic::Ordering::SeqCst);
+                            
+                            let tm = task_manager_put.clone();
+                            let tid = task_id_put.clone();
+                            let fp = batch_file_path_put.clone();
+                            let is_b = is_batch_put;
+                            safe_spawn_progress_update(async move {
+                                if is_b {
+                                    tm.update_file_progress(&tid, &fp, progress, None).await;
+                                } else {
+                                    tm.update_progress(&tid, progress).await;
+                                }
+                            });
                         }));
                         
                         driver_clone.put(&actual_path_clone, bytes::Bytes::from(merged_data), progress_callback).await?;
@@ -317,8 +341,6 @@ pub async fn fs_upload(
         } else {
             // 其他所有驱动：使用全局writer缓存，流式写入，不缓存本地
             let writer_key = format!("{}_{}", current_task_id, filename.replace("/", "_"));
-            let chunk_size = data.len() as u64;
-            let processed = (chunk_index as u64 + 1) * chunk_size;
             
             // 写入前再次检查任务状态（处理取消/暂停）
             if let Some(control) = state.task_manager.get_control(&current_task_id).await {
@@ -346,7 +368,7 @@ pub async fn fs_upload(
             // 第一个分片：创建writer并缓存
             if chunk_index == 0 {
                 // 创建progress callback，driver可用于报告上传进度
-                // 前端传输占40%，driver上传占60%
+                // 分片上传：只显示上传到驱动的进度（0-100%）
                 let task_manager_clone = state.task_manager.clone();
                 let task_id_clone = current_task_id.clone();
                 let file_path_clone = batch_file_path.clone();
@@ -354,15 +376,16 @@ pub async fn fs_upload(
                 let ts = total_size;
                 
                 let progress_callback: Option<yaolist_backend::storage::ProgressCallback> = Some(std::sync::Arc::new(move |uploaded: u64, total: u64| {
-                    // uploaded/total 表示driver上传进度，映射到 40%-100%
+                    // uploaded/total 表示driver上传进度，直接映射到 0-100%
                     let ratio = if total > 0 { uploaded as f64 / total as f64 } else { 1.0 };
-                    let progress = (ts as f64 * (0.4 + ratio * 0.6)) as u64;
+                    let progress = (ts as f64 * ratio) as u64;
                     
                     let tm = task_manager_clone.clone();
                     let tid = task_id_clone.clone();
                     let fp = file_path_clone.clone();
-                    tokio::spawn(async move {
-                        if is_batch {
+                    let is_b = is_batch;
+                    safe_spawn_progress_update(async move {
+                        if is_b {
                             tm.update_file_progress(&tid, &fp, progress, None).await;
                         } else {
                             tm.update_progress(&tid, progress).await;
@@ -370,9 +393,10 @@ pub async fn fs_upload(
                     });
                 }));
                 
+                // 根据驱动能力声明，直接创建writer（驱动应该自己决定是否支持流式写入）
                 let writer = driver.open_writer(&actual_path, Some(total_size), progress_callback).await
                     .map_err(|e| {
-                        tracing::error!("open_writer failed: {}", e);
+                        tracing::error!("Failed to open writer: {}", e);
                         StatusCode::INTERNAL_SERVER_ERROR
                     })?;
                 
@@ -380,16 +404,27 @@ pub async fn fs_upload(
                 writers.insert(writer_key.clone(), tokio::sync::Mutex::new(writer));
             }
             
-            // 写入当前分片数据
+            // 写入文件数据到writer（分块写入以模拟流式）
+            let current_chunk_size = file_data.len() as u64;
             {
                 let readers = STREAM_WRITERS.read().await;
                 if let Some(writer_mutex) = readers.get(&writer_key) {
                     let mut writer = writer_mutex.lock().await;
-                    writer.write_all(&data).await
-                        .map_err(|e| {
-                            tracing::error!("write chunk failed: {}", e);
-                            StatusCode::INTERNAL_SERVER_ERROR
-                        })?;
+                    
+                    // 分块写入，每次最多写入1MB
+                    let mut offset = 0;
+                    while offset < file_data.len() {
+                        let end = std::cmp::min(offset + STREAM_BUFFER_SIZE, file_data.len());
+                        let chunk = &file_data[offset..end];
+                        
+                        writer.write_all(chunk).await
+                                .map_err(|e| {
+                                    tracing::error!("write chunk failed: {}", e);
+                                    StatusCode::INTERNAL_SERVER_ERROR
+                                })?;
+                        
+                        offset = end;
+                    }
                 } else {
                     // Writer不存在可能是任务已取消
                     tracing::warn!("Writer not found for key: {}, task may be cancelled", writer_key);
@@ -400,21 +435,7 @@ pub async fn fs_upload(
                 }
             }
             
-            drop(data);
-            
-            // 更新进度：前端传输占40%，driver上传占60%
-            // processed / total_size 映射到 0-40%
-            let front_progress = ((processed as f64 / total_size as f64) * 0.4 * total_size as f64) as u64;
-            if is_batch_task {
-                state.task_manager.update_file_progress(
-                    &current_task_id, 
-                    &batch_file_path, 
-                    front_progress.min((total_size as f64 * 0.4) as u64),
-                    Some(chunk_index as u32)
-                ).await;
-            } else {
-                state.task_manager.update_progress(&current_task_id, front_progress.min((total_size as f64 * 0.4) as u64)).await;
-            }
+            // 分片上传：进度完全由driver的回调提供，不手动更新前端传输进度
             
             // 最后一个分片：关闭writer并清理
             if chunk_index == total_chunks - 1 {
@@ -422,7 +443,13 @@ pub async fn fs_upload(
                     let mut writers = STREAM_WRITERS.write().await;
                     if let Some(writer_mutex) = writers.remove(&writer_key) {
                         let mut writer = writer_mutex.lock().await;
-                        writer.shutdown().await.ok();
+                        if let Err(e) = writer.shutdown().await {
+                            tracing::error!("Writer shutdown failed: {}", e);
+                            return Ok(Json(json!({
+                                "code": 500,
+                                "message": format!("关闭writer失败: {}", e)
+                            })));
+                        }
                     }
                 }
                 
@@ -456,38 +483,118 @@ pub async fn fs_upload(
             }
         })));
     } else {
-        // 单文件上传 - 使用put方法
+        // 单文件上传 - 使用流式写入（open_writer），不加载到内存
+        // PUT方法：显示前端传输到后端缓存（0-50%）和上传到驱动（50-100%）
         tracing::debug!("Single file upload: {} -> {}", batch_file_path, actual_path);
         
-        let file_size = data.len() as u64;
+        // 创建进度回调：driver上传进度映射到50-100%
+        let task_manager_clone = state.task_manager.clone();
+        let task_id_clone = current_task_id.clone();
+        let file_path_clone = batch_file_path.clone();
+        let is_batch = is_batch_task;
+        let ts = total_size;
         
-        // 创建进度回调 - 使用共享原子状态，避免频繁创建线程
-        let shared_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let shared_progress_cb = shared_progress.clone();
-        let progress_callback: Option<yaolist_backend::storage::ProgressCallback> = Some(std::sync::Arc::new(move |completed: u64, _total: u64| {
-            shared_progress_cb.store(completed, std::sync::atomic::Ordering::SeqCst);
+        let progress_callback: Option<yaolist_backend::storage::ProgressCallback> = Some(std::sync::Arc::new(move |uploaded: u64, total: u64| {
+            // uploaded/total 表示driver上传进度，映射到 50%-100%
+            let ratio = if total > 0 { uploaded as f64 / total as f64 } else { 1.0 };
+            let progress = (ts as f64 * (0.5 + ratio * 0.5)) as u64;
+            
+            let tm = task_manager_clone.clone();
+            let tid = task_id_clone.clone();
+            let fp = file_path_clone.clone();
+            let is_b = is_batch;
+            safe_spawn_progress_update(async move {
+                if is_b {
+                    tm.update_file_progress(&tid, &fp, progress, None).await;
+                } else {
+                    tm.update_progress(&tid, progress).await;
+                }
+            });
         }));
         
-        // 调用put上传
-        driver.put(&actual_path, bytes::Bytes::from(data), progress_callback).await
+        // 创建writer
+        let mut writer = driver.open_writer(&actual_path, Some(total_size), progress_callback).await
             .map_err(|e| {
-                tracing::error!("Single file put failed: {}", e);
+                tracing::error!("open_writer failed: {}", e);
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         
-        // 上传完成后读取最终进度并更新
-        let final_progress = shared_progress.load(std::sync::atomic::Ordering::SeqCst);
-        if final_progress > 0 {
-            if is_batch_task {
-                state.task_manager.update_file_progress(&current_task_id, &batch_file_path, final_progress, None).await;
-            } else {
-                state.task_manager.update_progress(&current_task_id, final_progress).await;
+        // 分块写入文件数据到writer，同时启动定期更新前端传输进度（0-50%）
+        let task_manager_clone = state.task_manager.clone();
+        let task_id_clone = current_task_id.clone();
+        let file_path_clone = batch_file_path.clone();
+        let is_batch_clone = is_batch_task;
+        let total_file_size = file_data.len() as u64;
+        let total_size_clone = ts;
+        
+        // 使用 Arc 和 Mutex 来跟踪已写入的字节数
+        let written_bytes = Arc::new(tokio::sync::Mutex::new(0u64));
+        let written_bytes_clone = written_bytes.clone();
+        let stop_progress_update = Arc::new(tokio::sync::Notify::new());
+        let stop_progress_update_clone = stop_progress_update.clone();
+        
+        // 启动定期进度更新任务（每秒更新一次）
+        let progress_update_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let written = *written_bytes_clone.lock().await;
+                        // 更新前端传输进度：0-50%（基于累计写入的字节数）
+                        let front_progress = if total_file_size > 0 {
+                            ((written as f64 / total_file_size as f64) * 0.5 * total_size_clone as f64) as u64
+                        } else {
+                            0
+                        };
+                        
+                        if is_batch_clone {
+                            task_manager_clone.update_file_progress(&task_id_clone, &file_path_clone, front_progress, None).await;
+                        } else {
+                            task_manager_clone.update_progress(&task_id_clone, front_progress).await;
+                        }
+                    }
+                    _ = stop_progress_update_clone.notified() => {
+                        break;
+                    }
+                }
             }
+        });
+        
+        // 分块写入文件数据
+        let mut offset = 0;
+        while offset < file_data.len() {
+            let end = std::cmp::min(offset + STREAM_BUFFER_SIZE, file_data.len());
+            let chunk = &file_data[offset..end];
+            
+            writer.write_all(chunk).await
+                .map_err(|e| {
+                    tracing::error!("write chunk failed: {}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            
+            // 更新已写入字节数
+            {
+                let mut written = written_bytes.lock().await;
+                *written = end as u64;
+            }
+            
+            offset = end;
         }
+        
+        // 停止进度更新任务
+        stop_progress_update.notify_one();
+        progress_update_handle.await.ok();
+        
+        // 关闭writer
+        writer.shutdown().await
+            .map_err(|e| {
+                tracing::error!("writer shutdown failed: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
         
         // 标记文件/任务完成
         if is_batch_task {
-            state.task_manager.update_file_progress(&current_task_id, &batch_file_path, file_size, None).await;
+            state.task_manager.update_file_progress(&current_task_id, &batch_file_path, total_size, None).await;
             state.task_manager.complete_file(&current_task_id, &batch_file_path).await;
         } else {
             state.task_manager.complete_task(&current_task_id).await;

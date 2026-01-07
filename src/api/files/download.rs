@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::io::Write;
 use axum::{
     extract::{State, Path, Query, ConnectInfo},
-    http::{StatusCode, header, HeaderMap},
+    http::{StatusCode, header, HeaderMap, Method},
     response::Response,
     body::Body,
     Json,
@@ -190,6 +190,7 @@ pub async fn fs_download(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
     Query(_query): Query<DownloadQuery>,
+    method: Method,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     // Validate download domain / 验证下载域名
@@ -232,7 +233,7 @@ pub async fn fs_download(
     let driver = state.storage_manager.get_driver(&download_token.driver_id).await
         .ok_or(StatusCode::NOT_FOUND)?;
     
-    // 如果驱动支持直链，尝试获取直链并302重定向
+    // 如果驱动支持直链，尝试获取直链并302重定向（所有请求包括Range都走302）
     if download_token.can_direct_link {
         if let Ok(Some(direct_url)) = driver.get_direct_link(&download_token.path).await {
             tracing::debug!("fs_download: 302重定向到直链 url={}", direct_url);
@@ -242,11 +243,29 @@ pub async fn fs_download(
                 stats::record_download(&state.db, user_id, download_token.file_size).await;
             }
             
-            return Ok(Response::builder()
+            // 获取请求的Origin头，用于CORS
+            // 如果请求有Origin头，使用它；否则使用*（但不能与credentials一起使用）
+            let mut response_builder = Response::builder()
                 .status(StatusCode::FOUND)
                 .header(header::LOCATION, direct_url)
                 .header("Referrer-Policy", "no-referrer")
-                .header(header::CACHE_CONTROL, "max-age=0, no-cache, no-store, must-revalidate")
+                .header(header::CACHE_CONTROL, "max-age=0, no-cache, no-store, must-revalidate");
+            
+            // 添加CORS头，允许跨域访问
+            if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+                // 如果有Origin头，使用它并允许credentials
+                response_builder = response_builder
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
+                    .header(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+            } else {
+                // 如果没有Origin头，使用*（但不能与credentials一起使用）
+                response_builder = response_builder
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+            }
+            
+            return Ok(response_builder
+                .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, OPTIONS")
+                .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Length, Content-Range, Accept-Ranges")
                 .body(Body::empty())
                 .unwrap());
         }
@@ -334,6 +353,11 @@ pub async fn fs_download(
     // 如果获取到文件大小，添加Content-Length header
     if let Some(size) = file_size {
         response = response.header(header::CONTENT_LENGTH, size);
+    }
+    
+    // HEAD请求：只返回headers，不返回body
+    if method == Method::HEAD {
+        return Ok(response.body(Body::empty()).unwrap());
     }
     
     Ok(response.body(body).unwrap())

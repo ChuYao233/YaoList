@@ -127,6 +127,10 @@ pub struct Task {
     pub conflict_strategy: Option<String>,  // 冲突策略
     #[serde(skip)]
     pub last_saved: Option<DateTime<Utc>>,  // 上次保存时间（不序列化）
+    #[serde(skip)]
+    pub last_speed_update_time: Option<DateTime<Utc>>,  // 上次速度更新时间（不序列化）
+    #[serde(skip)]
+    pub last_speed_processed_size: u64,  // 上次速度更新时的已处理大小（不序列化）
 }
 
 impl Task {
@@ -163,6 +167,8 @@ impl Task {
             items: None,
             conflict_strategy: None,
             last_saved: None,
+            last_speed_update_time: None,
+            last_speed_processed_size: 0,
         }
     }
     
@@ -200,6 +206,8 @@ impl Task {
             items: None,
             conflict_strategy: None,
             last_saved: None,
+            last_speed_update_time: None,
+            last_speed_processed_size: 0,
         }
     }
     
@@ -238,6 +246,8 @@ impl Task {
             items: Some(items),
             conflict_strategy: Some(conflict_strategy),
             last_saved: None,
+            last_speed_update_time: None,
+            last_speed_processed_size: 0,
         }
     }
 }

@@ -17,6 +17,7 @@
 
 - [x] **本地存储** - 本地文件系统
 - [x] **[OneDrive](https://www.microsoft.com/en-us/microsoft-365/onedrive/online-cloud-storage)** - 微软 OneDrive（个人版和商业版）
+- [x] **[OneDrive App](https://www.microsoft.com/en-us/microsoft-365/onedrive/online-cloud-storage)** - 微软 OneDrive 应用模式（client_credentials OAuth，支持流式上传）
 - [x] **[天翼云盘](https://cloud.189.cn)** - 中国电信云盘（个人版和家庭版）
 - [x] **[123云盘](https://www.123pan.com)** - 123云盘（开放API）
 - [x] **[夸克网盘](https://pan.quark.cn)** - 夸克网盘
