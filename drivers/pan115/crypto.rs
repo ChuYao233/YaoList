@@ -1,5 +1,4 @@
 //! 115云盘加密模块
-//! 完全照抄OpenList的m115 XOR+RSA加密实现
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use sha1::{Sha1, Digest as Sha1Digest};

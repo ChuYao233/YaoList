@@ -59,6 +59,7 @@ http-body-util = "0.1"
 bytes = "1.5"
 suppaftp = "6.0"
 ftp-rs = "0.2.0"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 captcha = "0.0.9"
 rsa = "0.9"
 aes = "0.8"

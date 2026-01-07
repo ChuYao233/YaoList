@@ -13,6 +13,7 @@ pub mod lanzou;
 pub mod pikpak;
 pub mod yun139;
 pub mod pan115;
+pub mod sftp;
 
 use crate::storage::StorageManager;
 
@@ -44,5 +45,7 @@ pub async fn register_all(manager: &StorageManager) -> anyhow::Result<()> {
     manager.register_factory(Box::new(yun139::Yun139DriverFactory)).await?;
     // Register 115 Cloud driver / 注册115云盘驱动
     manager.register_factory(Box::new(pan115::Pan115DriverFactory)).await?;
+    // Register SFTP driver / 注册 SFTP 驱动
+    manager.register_factory(Box::new(sftp::SftpDriverFactory)).await?;
     Ok(())
 }

@@ -127,6 +127,12 @@ Configuration file: `config.json`
 - [Driver Development Guide](./drivers/DRIVER_DEVELOPMENT.md)
 - [API Documentation](./docs/API.md) (Coming soon)
 
+## ⚠️ Known Issues
+
+- **SFTP with latest OpenSSH servers**: The built-in SFTP driver is based on `libssh2`.  
+  Some very new OpenSSH server versions (with post-quantum KEX enabled by default) may fail the SSH handshake with `Unable to exchange encryption keys`.  
+  As a workaround, please ensure your SSH server also enables classic KEX algorithms such as `curve25519-sha256`, `curve25519-sha256@libssh.org`, `ecdh-sha2-nistp256`, or `diffie-hellman-group14-*`.
+
 ## 🛠️ Tech Stack
 
 ### Backend
