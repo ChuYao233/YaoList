@@ -230,6 +230,23 @@ pub async fn fs_list(
         let header = get_header(meta.as_ref(), &path);
         let write = perms.is_admin || perms.create_upload || can_write(meta.as_ref(), &path);
         
+        // 获取存储空间信息（如果驱动支持且允许前台显示）
+        let mut space_info: Option<Value> = None;
+        for mount in &matching_mounts {
+            if let Some(driver) = state.storage_manager.get_driver(&mount.id).await {
+                if driver.show_space_in_frontend() {
+                    if let Ok(Some(info)) = driver.get_space_info().await {
+                        space_info = Some(json!({
+                            "used": info.used,
+                            "total": info.total,
+                            "free": info.free
+                        }));
+                        break; // 只取第一个有空间信息的驱动
+                    }
+                }
+            }
+        }
+        
         return Ok(Json(json!({
             "code": 200,
             "message": "success",
@@ -244,7 +261,8 @@ pub async fn fs_list(
                 "header": header,
                 "write": write,
                 "provider": "Mixed",
-                "all_names": all_names
+                "all_names": all_names,
+                "space": space_info
             }
         })));
     }
@@ -624,4 +642,257 @@ pub async fn fs_get(
         "data": null,
         "error_type": "FILE_NOT_FOUND"
     })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FsPropertiesReq {
+    pub path: String,
+}
+
+/// POST /api/fs/properties - 获取文件/文件夹属性（包括文件夹大小统计）
+pub async fn fs_properties(
+    State(state): State<Arc<AppState>>,
+    cookies: Cookies,
+    Json(req): Json<FsPropertiesReq>,
+) -> Result<Json<Value>, StatusCode> {
+    let req_path = fix_and_clean_path(&req.path);
+    
+    // 获取用户上下文
+    let user_ctx = get_user_context(&state, &cookies).await;
+    let perms = &user_ctx.permissions;
+    
+    // 检查读取权限
+    if !perms.read_files {
+        return Ok(Json(json!({
+            "code": 403,
+            "message": "没有读取权限"
+        })));
+    }
+    
+    // 将用户请求路径与用户根路径结合
+    let path = match join_user_path(&user_ctx.root_path, &req_path) {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(Json(json!({
+                "code": 403,
+                "message": e
+            })));
+        }
+    };
+    
+    // 获取所有存储挂载点
+    let mounts = get_all_mounts(&state).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // 获取匹配的驱动
+    let matching_mounts = get_matching_mounts(&path, &mounts);
+    
+    if matching_mounts.is_empty() {
+        // 检查是否是虚拟目录
+        let virtual_dirs = get_virtual_files_by_path(&path, &mounts);
+        if !virtual_dirs.is_empty() || path == "/" {
+            return Ok(Json(json!({
+                "code": 200,
+                "message": "success",
+                "data": {
+                    "name": path.split('/').last().unwrap_or("/"),
+                    "path": path,
+                    "size": 0,
+                    "is_dir": true,
+                    "modified": "",
+                    "created": "",
+                    "type": "virtual",
+                    "file_count": 0,
+                    "folder_count": virtual_dirs.len()
+                }
+            })));
+        }
+        
+        return Ok(Json(json!({
+            "code": 404,
+            "message": "路径不存在"
+        })));
+    }
+    
+    // 计算实际路径
+    let mount_path = fix_and_clean_path(&matching_mounts[0].mount_path);
+    let actual_path = if path.len() > mount_path.len() {
+        fix_and_clean_path(&path[mount_path.len()..])
+    } else {
+        "/".to_string()
+    };
+    
+    // 获取驱动
+    let driver = match state.storage_manager.get_driver(&matching_mounts[0].id).await {
+        Some(d) => d,
+        None => {
+            return Ok(Json(json!({
+                "code": 500,
+                "message": "存储驱动不可用"
+            })));
+        }
+    };
+    
+    // 获取文件/文件夹信息
+    let parent_path = actual_path.rsplitn(2, '/').nth(1).unwrap_or("/");
+    let parent_path = if parent_path.is_empty() { "/" } else { parent_path };
+    let filename = actual_path.split('/').last().unwrap_or("");
+    
+    // 如果是根目录
+    if actual_path == "/" {
+        // 递归统计根目录内容
+        let (file_count, folder_count, total_size) = count_folder_contents(&driver, "/").await;
+        
+        return Ok(Json(json!({
+            "code": 200,
+            "message": "success",
+            "data": {
+                "name": path.split('/').last().unwrap_or("/"),
+                "path": path,
+                "size": total_size,
+                "is_dir": true,
+                "modified": "",
+                "created": "",
+                "type": "folder",
+                "file_count": file_count,
+                "folder_count": folder_count
+            }
+        })));
+    }
+    
+    // 在父目录中查找文件
+    match driver.list(parent_path).await {
+        Ok(files) => {
+            if let Some(file) = files.iter().find(|f| f.name == filename) {
+                if file.is_dir {
+                    // 统计文件夹内容
+                    let (file_count, folder_count, total_size) = count_folder_contents(&driver, &actual_path).await;
+                    
+                    return Ok(Json(json!({
+                        "code": 200,
+                        "message": "success",
+                        "data": {
+                            "name": file.name,
+                            "path": path,
+                            "size": total_size,
+                            "is_dir": true,
+                            "modified": file.modified.clone().unwrap_or_default(),
+                            "created": "",
+                            "type": "folder",
+                            "file_count": file_count,
+                            "folder_count": folder_count
+                        }
+                    })));
+                } else {
+                    // 文件属性
+                    let ext = file.name.split('.').last().unwrap_or("").to_lowercase();
+                    let mime_type = get_mime_type(&ext);
+                    
+                    return Ok(Json(json!({
+                        "code": 200,
+                        "message": "success",
+                        "data": {
+                            "name": file.name,
+                            "path": path,
+                            "size": file.size,
+                            "is_dir": false,
+                            "modified": file.modified.clone().unwrap_or_default(),
+                            "created": "",
+                            "type": "file",
+                            "extension": ext,
+                            "mime_type": mime_type
+                        }
+                    })));
+                }
+            }
+        }
+        Err(e) => {
+            return Ok(Json(json!({
+                "code": 500,
+                "message": format!("获取文件信息失败: {}", e)
+            })));
+        }
+    }
+    
+    Ok(Json(json!({
+        "code": 404,
+        "message": "文件不存在"
+    })))
+}
+
+/// 递归统计文件夹内容
+async fn count_folder_contents(
+    driver: &std::sync::Arc<Box<dyn yaolist_backend::storage::StorageDriver>>,
+    path: &str
+) -> (usize, usize, u64) {
+    let mut file_count = 0;
+    let mut folder_count = 0;
+    let mut total_size: u64 = 0;
+    
+    match driver.list(path).await {
+        Ok(files) => {
+            for file in files {
+                if file.is_dir {
+                    folder_count += 1;
+                    // 递归统计子文件夹（限制深度避免过长时间）
+                    let sub_path = if path == "/" {
+                        format!("/{}", file.name)
+                    } else {
+                        format!("{}/{}", path, file.name)
+                    };
+                    let (sub_files, sub_folders, sub_size) = 
+                        Box::pin(count_folder_contents(driver, &sub_path)).await;
+                    file_count += sub_files;
+                    folder_count += sub_folders;
+                    total_size += sub_size;
+                } else {
+                    file_count += 1;
+                    total_size += file.size;
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    
+    (file_count, folder_count, total_size)
+}
+
+/// 根据扩展名获取 MIME 类型
+fn get_mime_type(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        "m4a" => "audio/mp4",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "pdf" => "application/pdf",
+        "doc" | "docx" => "application/msword",
+        "xls" | "xlsx" => "application/vnd.ms-excel",
+        "ppt" | "pptx" => "application/vnd.ms-powerpoint",
+        "zip" => "application/zip",
+        "rar" => "application/x-rar-compressed",
+        "7z" => "application/x-7z-compressed",
+        "tar" => "application/x-tar",
+        "gz" => "application/gzip",
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        _ => "application/octet-stream"
+    }
 }

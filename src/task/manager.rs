@@ -110,7 +110,12 @@ impl TaskManager {
                     finished_at: finished_at_str.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                         .map(|dt| dt.with_timezone(&Utc)),
                     error: row.get("error"),
-                    user_id: row.get("user_id"),
+                    // 兼容 INTEGER 和 TEXT 类型的 user_id
+                    user_id: row.try_get::<Option<String>, _>("user_id")
+                        .unwrap_or_else(|_| row.try_get::<Option<i64>, _>("user_id")
+                            .ok()
+                            .flatten()
+                            .map(|id| id.to_string())),
                     current_file,
                     files,
                     items,
@@ -1056,6 +1061,7 @@ impl TaskManager {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(task_id) {
             let mut file_was_pending = false;
+            let mut file_found = false;
             
             if let Some(ref mut files) = task.files {
                 // 尝试多种方式匹配文件路径
@@ -1075,12 +1081,15 @@ impl TaskManager {
                 });
                 
                 if let Some(file) = file_opt {
+                    file_found = true;
                     // 只有未完成的文件才增加计数
                     if file.status != TaskStatus::Completed {
                         file_was_pending = true;
                         file.status = TaskStatus::Completed;
                         file.uploaded_size = file.size;
                     }
+                } else {
+                    tracing::warn!("complete_file: file not found in task files list: {} (task: {})", file_path, task_id);
                 }
                 
                 // 更新总进度
@@ -1098,7 +1107,16 @@ impl TaskManager {
                 .map(|files| files.iter().all(|f| f.status == TaskStatus::Completed))
                 .unwrap_or(false);
             
-            if all_done {
+            // 额外检查：如果 processed_files >= total_files，也应该标记为完成
+            let count_done = task.processed_files >= task.total_files && task.total_files > 0;
+            
+            tracing::debug!(
+                "complete_file: task={}, file={}, found={}, was_pending={}, processed={}/{}, all_done={}, count_done={}",
+                task_id, file_path, file_found, file_was_pending, 
+                task.processed_files, task.total_files, all_done, count_done
+            );
+            
+            if all_done || count_done {
                 task.status = TaskStatus::Completed;
                 task.progress = 100.0;
                 task.processed_size = task.total_size;

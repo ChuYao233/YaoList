@@ -49,8 +49,10 @@ pub struct FsListResp {
 /// 获取路径下的虚拟目录
 pub fn get_virtual_files_by_path(path: &str, mounts: &[crate::api::file_resolver::MountInfo]) -> Vec<serde_json::Value> {
     use yaolist_backend::utils::fix_and_clean_path;
+    use std::collections::HashMap;
     let path = fix_and_clean_path(path);
-    let mut virtual_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // 使用 HashMap 来保存目录名和对应的 driver_id（如果是直接挂载点）
+    let mut virtual_dirs: HashMap<String, Option<String>> = HashMap::new();
     
     for mount in mounts {
         let mount_path = fix_and_clean_path(&mount.mount_path);
@@ -67,19 +69,29 @@ pub fn get_virtual_files_by_path(path: &str, mounts: &[crate::api::file_resolver
             // 获取下一级目录名
             if let Some(next_dir) = relative.split('/').next() {
                 if !next_dir.is_empty() {
-                    virtual_dirs.insert(next_dir.to_string());
+                    // 如果这个目录就是挂载点（没有更深的路径），记录 driver_id
+                    let is_mount_point = relative == next_dir;
+                    if is_mount_point {
+                        virtual_dirs.insert(next_dir.to_string(), Some(mount.id.clone()));
+                    } else if !virtual_dirs.contains_key(next_dir) {
+                        virtual_dirs.insert(next_dir.to_string(), None);
+                    }
                 }
             }
         }
     }
     
-    virtual_dirs.into_iter().map(|name| {
-        serde_json::json!({
+    virtual_dirs.into_iter().map(|(name, driver_id)| {
+        let mut obj = serde_json::json!({
             "name": name,
             "size": 0,
             "is_dir": true,
             "modified": "",
             "created": ""
-        })
+        });
+        if let Some(id) = driver_id {
+            obj["driver_id"] = serde_json::json!(id);
+        }
+        obj
     }).collect()
 }

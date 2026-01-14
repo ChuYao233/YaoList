@@ -316,6 +316,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/fs/upload/batch", post(api::files::fs_create_batch_upload))
         .route("/api/fs/upload/progress", post(api::files::fs_update_upload_progress))
         .route("/api/fs/upload/complete_file", post(api::files::fs_complete_file))
+        .route("/api/fs/properties", post(api::files::fs_properties))
         .route("/api/admin/fs/list", post(api::files::admin_fs_list))
         .route("/api/tasks/list", post(api::tasks::list_tasks))
         .route("/api/tasks/get", post(api::tasks::get_task))

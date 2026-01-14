@@ -122,14 +122,17 @@ pub async fn create_user(
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     require_admin(&state, &cookies).await?;
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
     
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-        .fetch_one(&state.db)
+    // 获取下一个整数ID（与注册逻辑保持一致）
+    let max_id: Option<(i64,)> = sqlx::query_as("SELECT MAX(CAST(id AS INTEGER)) FROM users WHERE id GLOB '[0-9]*'")
+        .fetch_optional(&state.db)
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "服务器错误"}))))?;
-    let unique_id = (count + 1).to_string();
+        .ok()
+        .flatten();
+    let next_id = max_id.map(|(id,)| id + 1).unwrap_or(1);
+    let id = next_id.to_string();
+    let unique_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
     
     let password_hash = bcrypt::hash(&req.password, bcrypt::DEFAULT_COST)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "服务器错误"}))))?;
