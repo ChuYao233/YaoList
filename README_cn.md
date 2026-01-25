@@ -130,12 +130,6 @@ cargo build --release
 - [驱动开发指南](./drivers/DRIVER_DEVELOPMENT.md)
 - [API 文档](./docs/API.md)（即将推出）
 
-## ⚠️ 已知问题
-
-- **与最新 OpenSSH 服务器的 SFTP 兼容性**：内置 SFTP 驱动基于 `libssh2`。  
-  部分较新的 OpenSSH 服务器（默认启用后量子密钥交换算法）可能在握手阶段直接失败，报错为 `Unable to exchange encryption keys`。  
-  目前的解决方案是：请在 SSH 服务器侧同时启用经典密钥交换算法，例如 `curve25519-sha256`、`curve25519-sha256@libssh.org`、`ecdh-sha2-nistp256` 或 `diffie-hellman-group14-*`，以兼容现有客户端。
-
 ## 🛠️ 技术栈
 
 ### 后端
