@@ -63,6 +63,7 @@ ftp-rs = "0.2.0"
 russh = "0.48"
 russh-sftp = "2.0"
 russh-keys = "0.48"
+natord = "1.0"  # 自然排序
 captcha = "0.0.9"
 rsa = "0.9"
 aes = "0.8"

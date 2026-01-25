@@ -30,7 +30,9 @@
 - [x] **[PikPak](https://mypikpak.com)** - PikPak Cloud Drive
 - [x] **[Yun139](https://yun.139.com)** - China Mobile Cloud (Personal & Family)
 - [x] **[SFTP](https://en.wikipedia.org/wiki/SSH_File_Transfer_Protocol)** - SSH File Transfer Protocol
-- [ ] **[115 Cloud](https://115.com)** - 115 Cloud Drive (In Development)
+- [x] **[115 Cloud](https://115.com)** - 115 Cloud Drive
+- [x] **[123pan Share](https://www.123pan.com)** - 123 Cloud Drive Share Links (Read-only)
+- [x] **[115 Share](https://115.com)** - 115 Cloud Drive Share Links (Read-only)
 
 ### 🎯 Core Features
 

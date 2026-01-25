@@ -30,7 +30,9 @@
 - [x] **[PikPak](https://mypikpak.com)** - PikPakクラウドドライブ
 - [x] **[Yun139](https://yun.139.com)** - 中国移動クラウド（個人用・家族用）
 - [x] **[SFTP](https://en.wikipedia.org/wiki/SSH_File_Transfer_Protocol)** - SSHファイル転送プロトコル
-- [ ] **[115 Cloud](https://115.com)** - 115クラウドドライブ（開発中）
+- [x] **[115 Cloud](https://115.com)** - 115クラウドドライブ
+- [x] **[123pan Share](https://www.123pan.com)** - 123クラウドドライブ共有リンク（読み取り専用）
+- [x] **[115 Share](https://115.com)** - 115クラウドドライブ共有リンク（読み取り専用）
 
 ### 🎯 コア機能
 
@@ -101,16 +103,6 @@ cargo build --release
 
 # 実行
 ./target/release/yaolist-backend
-```
-
-### Docker
-
-```bash
-docker run -d \
-  --name yaolist \
-  -p 8180:8180 \
-  -v /path/to/data:/app/data \
-  chuyao233/yaolist:latest
 ```
 
 ## ⚙️ 設定

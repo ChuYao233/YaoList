@@ -310,7 +310,8 @@ pub async fn get_share_files(
         let cmp = match sort_by {
             "modified" => a.modified.cmp(&b.modified),
             "size" => a.size.cmp(&b.size),
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            // 使用自然排序（让 "2" 排在 "10" 前面）
+            _ => natord::compare_ignore_case(&a.name, &b.name),
         };
         
         if is_desc { cmp.reverse() } else { cmp }

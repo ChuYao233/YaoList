@@ -2,7 +2,7 @@
 //! 支持Cookie登录、秒传、分片上传、302直链
 
 mod types;
-mod crypto;
+pub mod crypto;
 mod client;
 mod driver;
 mod writer;

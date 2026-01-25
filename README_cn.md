@@ -29,7 +29,9 @@
 - [x] **[PikPak](https://mypikpak.com)** - PikPak 网盘
 - [x] **[移动云盘](https://yun.139.com)** - 中国移动云盘（个人版和家庭版）
 - [x] **[SFTP](https://en.wikipedia.org/wiki/SSH_File_Transfer_Protocol)** - SSH 文件传输协议
-- [ ] **[115网盘](https://115.com)** - 115云盘（开发中）
+- [x] **[115网盘](https://115.com)** - 115云盘
+- [x] **[123云盘分享](https://www.123pan.com)** - 123云盘分享链接（只读）
+- [x] **[115分享](https://115.com)** - 115云盘分享链接（只读）
 
 ### 🎯 核心功能
 
@@ -100,16 +102,6 @@ cargo build --release
 
 # 运行
 ./target/release/yaolist-backend
-```
-
-### Docker 部署
-
-```bash
-docker run -d \
-  --name yaolist \
-  -p 8180:8180 \
-  -v /path/to/data:/app/data \
-  chuyao233/yaolist:latest
 ```
 
 ## ⚙️ 配置文件

@@ -397,9 +397,26 @@ pub async fn get_user_context(state: &AppState, cookies: &Cookies) -> UserContex
     }
 }
 
-/// 获取游客组的根路径
+/// 获取游客用户的根路径（优先从 guest 用户获取，其次从游客组获取）
 pub async fn get_guest_root_path(state: &AppState) -> String {
-    let result = sqlx::query_as::<_, (Option<String>,)>(
+    // 优先从 guest 用户获取根路径
+    let user_root = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT root_path FROM users WHERE username = 'guest' AND enabled = 1 LIMIT 1"
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    
+    if let Some((Some(root),)) = user_root {
+        if !root.is_empty() && root != "/" {
+            tracing::debug!("游客根路径(用户): {}", root);
+            return root;
+        }
+    }
+    
+    // 其次从游客组获取根路径
+    let group_root = sqlx::query_as::<_, (Option<String>,)>(
         "SELECT root_path FROM user_groups WHERE name = '游客组' LIMIT 1"
     )
     .fetch_optional(&state.db)
@@ -407,7 +424,9 @@ pub async fn get_guest_root_path(state: &AppState) -> String {
     .ok()
     .flatten();
     
-    result.and_then(|(r,)| r).unwrap_or_else(|| "/".to_string())
+    let root = group_root.and_then(|(r,)| r).unwrap_or_else(|| "/".to_string());
+    tracing::debug!("游客根路径(组): {}", root);
+    root
 }
 
 /// 获取当前用户权限

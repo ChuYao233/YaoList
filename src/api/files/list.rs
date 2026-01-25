@@ -176,6 +176,7 @@ pub async fn fs_list(
         let sort_by = req.sort_by.as_deref().unwrap_or("name");
         let sort_order = req.sort_order.as_deref().unwrap_or("asc");
         let is_desc = sort_order == "desc";
+        tracing::debug!("排序参数: sort_by={}, sort_order={}, is_desc={}, 文件数={}", sort_by, sort_order, is_desc, content.len());
         
         content.sort_by(|a, b| {
             let a_is_dir = a.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -201,9 +202,10 @@ pub async fn fs_list(
                     a_size.cmp(&b_size)
                 }
                 _ => {
-                    let a_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-                    let b_name = b.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-                    a_name.cmp(&b_name)
+                    // 使用自然排序（让 "2" 排在 "10" 前面）
+                    let a_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let b_name = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    natord::compare_ignore_case(a_name, b_name)
                 }
             };
             
@@ -292,6 +294,44 @@ pub async fn fs_list(
     // 统计文件夹和文件数量
     let folder_count = virtual_files.iter().filter(|f| f.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false)).count();
     let file_count = virtual_files.len() - folder_count;
+    
+    // 虚拟目录也需要排序
+    let sort_by = req.sort_by.as_deref().unwrap_or("name");
+    let sort_order = req.sort_order.as_deref().unwrap_or("asc");
+    let is_desc = sort_order == "desc";
+    
+    let mut virtual_files = virtual_files;
+    virtual_files.sort_by(|a, b| {
+        let a_is_dir = a.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+        let b_is_dir = b.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+        
+        if a_is_dir && !b_is_dir {
+            return std::cmp::Ordering::Less;
+        }
+        if !a_is_dir && b_is_dir {
+            return std::cmp::Ordering::Greater;
+        }
+        
+        let cmp = match sort_by {
+            "modified" => {
+                let a_mod = a.get("modified").and_then(|v| v.as_str()).unwrap_or("");
+                let b_mod = b.get("modified").and_then(|v| v.as_str()).unwrap_or("");
+                a_mod.cmp(b_mod)
+            }
+            "size" => {
+                let a_size = a.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+                let b_size = b.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+                a_size.cmp(&b_size)
+            }
+            _ => {
+                let a_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let b_name = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                natord::compare_ignore_case(a_name, b_name)
+            }
+        };
+        
+        if is_desc { cmp.reverse() } else { cmp }
+    });
     
     // 虚拟目录也需要分页
     let total = virtual_files.len();

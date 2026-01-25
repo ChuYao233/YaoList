@@ -45,7 +45,7 @@ async fn get_search_permissions(state: &AppState, cookies: &Cookies) -> SearchUs
         None => {
             // 游客权限
             return sqlx::query_as::<_, SearchUserPermissions>(
-                "SELECT show_hidden_files FROM user_groups WHERE name = 'guest'"
+                "SELECT show_hidden_files FROM user_groups WHERE name = '游客组'"
             )
             .fetch_optional(&state.db)
             .await

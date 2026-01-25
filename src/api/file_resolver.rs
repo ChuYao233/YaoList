@@ -154,7 +154,7 @@ async fn get_guest_permissions(state: &AppState) -> UserPermissions {
         r#"SELECT 
             read_files, create_upload, rename_files, move_files, copy_files,
             delete_files, allow_direct_link, allow_share, is_admin, show_hidden_files, extract_files
-        FROM user_groups WHERE name = 'guest'"#
+        FROM user_groups WHERE name = '游客组'"#
     )
     .fetch_optional(&state.db)
     .await
@@ -182,17 +182,36 @@ async fn get_guest_permissions(state: &AppState) -> UserPermissions {
     }
 }
 
-/// 获取游客根路径
+/// 获取游客用户的根路径（优先从 guest 用户获取，其次从游客组获取）
 async fn get_guest_root_path(state: &AppState) -> String {
-    sqlx::query_scalar::<_, String>(
-        "SELECT root_path FROM user_groups WHERE name = 'guest'"
+    // 优先从 guest 用户获取根路径
+    let user_root = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT root_path FROM users WHERE username = 'guest' AND enabled = 1 LIMIT 1"
     )
     .fetch_optional(&state.db)
     .await
     .ok()
-    .flatten()
-    .filter(|p| !p.is_empty())
-    .unwrap_or_else(|| "/".to_string())
+    .flatten();
+    
+    if let Some((Some(root),)) = user_root {
+        if !root.is_empty() && root != "/" {
+            tracing::debug!("游客根路径(用户): {}", root);
+            return root;
+        }
+    }
+    
+    // 其次从游客组获取根路径
+    let group_root = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT root_path FROM user_groups WHERE name = '游客组' LIMIT 1"
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    
+    let root = group_root.and_then(|(r,)| r).unwrap_or_else(|| "/".to_string());
+    tracing::debug!("游客根路径(组): {}", root);
+    root
 }
 
 /// 将用户请求路径与用户根路径结合（防止路径穿越）
