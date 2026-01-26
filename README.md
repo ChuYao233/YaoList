@@ -98,6 +98,12 @@ chmod +x yaolist-linux-amd64
 git clone https://github.com/chuyao233/yaolist.git
 cd yaolist
 
+# make public dir
+mkdir public
+
+# copy static files to public ,  https://github.com/ChuYao233/YaoList-Frontend/releases
+
+
 # Build (requires Rust 1.70+)
 cargo build --release
 

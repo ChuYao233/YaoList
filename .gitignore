@@ -36,3 +36,6 @@ config.json
 
 # Build scripts
 *.cmd
+
+
+/public/**
