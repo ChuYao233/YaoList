@@ -15,7 +15,7 @@ use rust_embed::RustEmbed;
 
 /// Embed frontend static files (compile-time embed from ../frontend/dist) / 嵌入前端静态文件
 #[derive(RustEmbed)]
-#[folder = "../frontend/dist"]
+#[folder = "public"]
 struct FrontendAssets;
 
 mod api;
