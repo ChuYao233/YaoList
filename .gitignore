@@ -36,7 +36,6 @@ config.json
 
 # Build scripts
 *.cmd
+build.rs
 
-
-/public/**
-!/public/.gitkeep
+/public/
