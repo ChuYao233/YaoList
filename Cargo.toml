@@ -72,7 +72,7 @@ p256 = { version = "0.13", features = ["ecdh"] }
 num-bigint = "0.4"
 spki = "0.7"
 quick-xml = { version = "0.31", features = ["serde", "serialize"] }
-rust-embed = "8.2"
+rust-embed = { version = "8.2", features = ["include-exclude"] }
 # SMB/CIFS 使用系统原生支持（Linux CIFS 挂载 / Windows UNC 路径）
 # WebDAV支持
 tokio-stream = "0.1"

@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use reqwest::{Client, Method};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
 
@@ -691,7 +691,7 @@ impl Yun139Client {
     }
 
     /// 删除(旧版/家庭版) / Delete (old/family version)
-    pub async fn delete(&self, content_ids: Vec<String>, catalog_ids: Vec<String>, path: &str) -> Result<()> {
+    pub async fn delete(&self, content_ids: Vec<String>, catalog_ids: Vec<String>, _path: &str) -> Result<()> {
         let body = json!({
             "createBatchOprTaskReq": {
                 "taskType": 2,

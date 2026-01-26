@@ -806,7 +806,7 @@ impl FtpStreamWriter {
 
 impl AsyncWrite for FtpStreamWriter {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {

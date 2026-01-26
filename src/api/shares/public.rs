@@ -10,8 +10,7 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 use crate::api::file_resolver::{get_all_mounts, get_matching_mounts, get_first_mount};
-use crate::api::files::{create_download_token, create_download_token_with_user};
-use crate::api::stats;
+use crate::api::files::create_download_token_with_user;
 use super::types::*;
 use rand::Rng;
 

@@ -536,7 +536,7 @@ impl AsyncRead for StreamReader {
             return Poll::Ready(Ok(()));
         }
 
-        use futures::StreamExt;
+        
         match self.stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 self.buffer = chunk;

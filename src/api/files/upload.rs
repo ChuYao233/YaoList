@@ -405,7 +405,7 @@ pub async fn fs_upload(
             }
             
             // 写入文件数据到writer（分块写入以模拟流式）
-            let current_chunk_size = file_data.len() as u64;
+            let _current_chunk_size = file_data.len() as u64;
             {
                 let readers = STREAM_WRITERS.read().await;
                 if let Some(writer_mutex) = readers.get(&writer_key) {

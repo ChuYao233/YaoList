@@ -11,7 +11,6 @@ use rand::Rng;
 
 use crate::state::AppState;
 use crate::auth::SESSION_COOKIE_NAME;
-use crate::api::file_resolver::{get_all_mounts, get_matching_mounts, get_first_mount};
 use super::types::*;
 
 fn generate_short_id(length: usize) -> String {

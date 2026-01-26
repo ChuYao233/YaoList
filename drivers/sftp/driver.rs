@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use russh::client::{self, Config, Handle, Handler};
 use russh::keys::PublicKey;
 use russh_sftp::client::SftpSession;
-use std::io::SeekFrom;
 use std::ops::Range;
 use std::path::Path;
 use std::pin::Pin;
@@ -20,7 +19,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::storage::{

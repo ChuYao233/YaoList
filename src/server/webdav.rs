@@ -397,7 +397,7 @@ impl DavDirEntry for WebDavDirEntry {
         self.name.as_bytes().to_vec()
     }
 
-    fn metadata(&self) -> FsFuture<Box<dyn DavMetaData>> {
+    fn metadata(&self) -> FsFuture<'_, Box<dyn DavMetaData>> {
         let meta = self.metadata.clone();
         Box::pin(async move { Ok(Box::new(meta) as Box<dyn DavMetaData>) })
     }
@@ -430,7 +430,7 @@ impl Debug for WebDavFile {
 }
 
 impl DavFile for WebDavFile {
-    fn metadata(&mut self) -> FsFuture<Box<dyn DavMetaData>> {
+    fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
         let size = self.size;
         Box::pin(async move {
             Ok(Box::new(WebDavMetaData {
@@ -442,21 +442,21 @@ impl DavFile for WebDavFile {
         })
     }
 
-    fn write_buf(&mut self, _buf: Box<dyn bytes::Buf + Send>) -> FsFuture<()> {
+    fn write_buf(&mut self, _buf: Box<dyn bytes::Buf + Send>) -> FsFuture<'_, ()> {
         Box::pin(async move {
             // TODO: 实现写入
             Err(FsError::NotImplemented)
         })
     }
 
-    fn write_bytes(&mut self, _buf: Bytes) -> FsFuture<()> {
+    fn write_bytes(&mut self, _buf: Bytes) -> FsFuture<'_, ()> {
         Box::pin(async move {
             // TODO: 实现写入
             Err(FsError::NotImplemented)
         })
     }
 
-    fn read_bytes(&mut self, count: usize) -> FsFuture<Bytes> {
+    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, Bytes> {
         use tokio::io::AsyncReadExt;
         
         let driver_id = self.driver_id.clone();
@@ -501,7 +501,7 @@ impl DavFile for WebDavFile {
         })
     }
 
-    fn seek(&mut self, pos: SeekFrom) -> FsFuture<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
         let position = self.position.clone();
         let size = self.size;
         Box::pin(async move {
@@ -516,13 +516,13 @@ impl DavFile for WebDavFile {
         })
     }
 
-    fn flush(&mut self) -> FsFuture<()> {
+    fn flush(&mut self) -> FsFuture<'_, ()> {
         Box::pin(async move { Ok(()) })
     }
 }
 
 impl DavFileSystem for WebDavFs {
-    fn open<'a>(&'a self, path: &'a DavPath, _options: OpenOptions) -> FsFuture<Box<dyn DavFile>> {
+    fn open<'a>(&'a self, path: &'a DavPath, _options: OpenOptions) -> FsFuture<'a, Box<dyn DavFile>> {
         let path_clone = path.clone();
         let fs = self.clone();
 
@@ -602,7 +602,7 @@ impl DavFileSystem for WebDavFs {
         &'a self,
         path: &'a DavPath,
         _meta: ReadDirMeta,
-    ) -> FsFuture<FsStream<Box<dyn DavDirEntry>>> {
+    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
         let path_clone = path.clone();
         let fs = self.clone();
 
@@ -689,7 +689,7 @@ impl DavFileSystem for WebDavFs {
         })
     }
 
-    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<Box<dyn DavMetaData>> {
+    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
         let path_clone = path.clone();
         let fs = self.clone();
 
@@ -784,7 +784,7 @@ impl DavFileSystem for WebDavFs {
         })
     }
 
-    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<()> {
+    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         let path_clone = path.clone();
         let fs = self.clone();
 
@@ -828,7 +828,7 @@ impl DavFileSystem for WebDavFs {
         })
     }
 
-    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<()> {
+    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         let path_clone = path.clone();
         let fs = self.clone();
 
@@ -872,11 +872,11 @@ impl DavFileSystem for WebDavFs {
         })
     }
 
-    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<()> {
+    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         self.remove_file(path)
     }
 
-    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<()> {
+    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
         let from_clone = from.clone();
         let to_clone = to.clone();
         let fs = self.clone();
@@ -965,7 +965,7 @@ impl DavFileSystem for WebDavFs {
         })
     }
 
-    fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<()> {
+    fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
         let from_clone = from.clone();
         let to_clone = to.clone();
         let fs = self.clone();

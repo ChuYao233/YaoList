@@ -205,7 +205,7 @@ pub fn aes_cbc_decrypt(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u
 
 /// 计算分片大小 / Calculate part size
 /// 默认16MB，确保内存占用<50MB
-pub fn get_part_size(size: i64, custom_size: i64) -> i64 {
+pub fn get_part_size(_size: i64, custom_size: i64) -> i64 {
     if custom_size != 0 {
         return custom_size;
     }

@@ -935,7 +935,7 @@ impl StorageDriver for LanzouDriver {
     async fn open_reader(
         &self,
         path: &str,
-        range: Option<Range<u64>>,
+        _range: Option<Range<u64>>,
     ) -> Result<Box<dyn AsyncRead + Unpin + Send>> {
         self.ensure_initialized().await?;
         

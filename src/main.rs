@@ -14,8 +14,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use rust_embed::RustEmbed;
 
 /// Embed frontend static files (compile-time embed from ../frontend/dist) / 嵌入前端静态文件
+/// 使用 include = "*" 允许文件夹为空，不影响构建
 #[derive(RustEmbed)]
 #[folder = "public"]
+#[include = "*"]
 struct FrontendAssets;
 
 mod api;

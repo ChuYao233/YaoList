@@ -672,7 +672,7 @@ impl StorageDriver for Yun139Driver {
         let size = size_hint.unwrap_or(0) as i64;
         
         // 139云盘不支持空文件，上传1字节占位符
-        let actual_size = if size == 0 { 1 } else { size };
+        let _actual_size = if size == 0 { 1 } else { size };
         
         match self.cloud_type() {
             CloudType::PersonalNew => {

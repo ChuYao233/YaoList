@@ -568,7 +568,7 @@ struct WebDavWriter {
 
 impl AsyncWrite for WebDavWriter {
     fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {

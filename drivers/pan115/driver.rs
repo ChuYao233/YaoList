@@ -232,7 +232,7 @@ impl StorageDriver for Pan115Driver {
         let user_id = client.user_id;
         let app_ver = client.app_ver.clone();
         let cookie = client.get_cookie().to_string();
-        let size_limit = client.get_size_limit();
+        let _size_limit = client.get_size_limit();
         drop(client);
         
         let writer = Pan115StreamWriter::new(

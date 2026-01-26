@@ -1024,7 +1024,7 @@ impl TaskManager {
             task.speed = speed;
             
             // 计算ETA
-            if let Some(started_at) = task.started_at {
+            if let Some(_started_at) = task.started_at {
                 if task.speed > 0.0 && task.total_size > task.processed_size {
                     let remaining = task.total_size - task.processed_size;
                     task.eta_seconds = Some((remaining as f64 / task.speed) as u64);

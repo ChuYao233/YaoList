@@ -14,7 +14,6 @@ use tower_cookies::Cookies;
 use crate::state::AppState;
 use crate::auth::SESSION_COOKIE_NAME;
 use yaolist_backend::geoip::get_geoip_manager;
-use super::types::*;
 
 /// GET /api/settings/geoip/status - 获取GeoIP数据库状态
 pub async fn get_geoip_status(

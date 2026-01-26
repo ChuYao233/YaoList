@@ -165,7 +165,7 @@ impl Pan115StreamWriter {
     
     async fn upload_empty_file(&self) -> Result<()> {
         let client = self.client.read().await;
-        let resp = client.rapid_upload(
+        let _resp = client.rapid_upload(
             0,
             &self.file_name,
             &self.parent_id,
@@ -181,7 +181,7 @@ impl Pan115StreamWriter {
     
     async fn upload_to_oss(&mut self, bucket: &str, object: &str, callback: &super::types::UploadCallback) -> Result<()> {
         let size = self.bytes_written as i64;
-        let total = size as u64;
+        let _total = size as u64;
         
         let client = self.client.read().await;
         let oss_token = client.get_oss_token().await?;
@@ -246,7 +246,7 @@ impl Pan115StreamWriter {
         let total = size as u64;
         
         let chunks = self.split_file(size)?;
-        let chunk_count = chunks.len();
+        let _chunk_count = chunks.len();
         
         let base_url = format!("https://{}.oss-cn-shenzhen.aliyuncs.com/{}", bucket, urlencoding::encode(object));
         
