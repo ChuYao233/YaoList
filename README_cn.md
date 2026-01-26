@@ -97,6 +97,13 @@ chmod +x yaolist-linux-amd64
 git clone https://github.com/chuyao233/yaolist.git
 cd yaolist
 
+
+# 创建静态资源目录
+mkdir public
+# 复制前端静态资源文件到public下，  https://github.com/ChuYao233/YaoList-Frontend/releases
+
+
+
 # 构建（需要 Rust 1.70+）
 cargo build --release
 
@@ -105,6 +112,10 @@ cargo build --release
 ```
 
 ## ⚙️ 配置文件
+
+
+程序启动后会自动创建该文件。
+
 
 配置文件：`config.json`
 
