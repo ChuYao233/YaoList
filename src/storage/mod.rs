@@ -25,6 +25,9 @@ pub struct ConfigItem {
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// Link URL for "link" type items (opens in new tab) / link类型的URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 impl ConfigItem {
@@ -37,6 +40,7 @@ impl ConfigItem {
             options: None,
             required: false,
             help: None,
+            link: None,
         }
     }
     
@@ -62,6 +66,11 @@ impl ConfigItem {
     
     pub fn options(mut self, val: &str) -> Self {
         self.options = Some(val.to_string());
+        self
+    }
+    
+    pub fn link(mut self, val: &str) -> Self {
+        self.link = Some(val.to_string());
         self
     }
 }

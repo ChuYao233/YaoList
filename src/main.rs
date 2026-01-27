@@ -359,6 +359,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/load_balance/groups/delete", post(api::load_balance::delete_group))
         .route("/api/load_balance/modes", get(api::load_balance::list_modes))
         .route("/api/load_balance/geoip", post(api::load_balance::lookup_ip_info))
+        // OAuth API
+        .route("/api/oauth/google/callback", get(api::oauth::google_oauth_callback))
+        .route("/api/oauth/google/exchange", post(api::oauth::exchange_token))
         .route("/download/:token", get(api::files::fs_download))
         .route("/dlink/*path", get(api::files::direct_link_download))
         // WebDAV routes

@@ -12,6 +12,7 @@ pub mod load_balance;
 pub mod meta;
 pub mod mounts;
 pub mod notification;
+pub mod oauth;
 pub mod search;
 pub mod server;
 pub mod settings;

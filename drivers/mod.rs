@@ -17,6 +17,7 @@ pub mod pan115;
 pub mod sftp;
 pub mod pan123_share;
 pub mod pan115_share;
+pub mod google_drive;
 
 use crate::storage::StorageManager;
 
@@ -56,5 +57,7 @@ pub async fn register_all(manager: &StorageManager) -> anyhow::Result<()> {
     manager.register_factory(Box::new(pan123_share::Pan123ShareDriverFactory)).await?;
     // Register 115Pan Share driver / 注册115云盘分享驱动
     manager.register_factory(Box::new(pan115_share::Pan115ShareDriverFactory)).await?;
+    // Register Google Drive driver / 注册Google Drive驱动
+    manager.register_factory(Box::new(google_drive::GoogleDriveDriverFactory)).await?;
     Ok(())
 }

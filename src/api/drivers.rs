@@ -330,6 +330,9 @@ pub async fn list_available_drivers(
                 let opts: Vec<&str> = options.split(',').collect();
                 prop.insert("enum".to_string(), json!(opts));
             }
+            if let Some(ref link) = item.link {
+                prop.insert("link".to_string(), json!(link));
+            }
             if item.required {
                 required.push(item.name.clone());
             }
