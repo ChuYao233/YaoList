@@ -773,10 +773,6 @@ impl AsyncWrite for GoogleDriveWriter {
 
         self.closed = true;
 
-        if chunk.is_empty() && self.uploaded_bytes == 0 {
-            return Poll::Ready(Ok(()));
-        }
-
         tracing::info!("Google Drive Writer shutdown: remaining={}, total_uploaded={}", 
             chunk.len(), uploaded_bytes);
 
@@ -800,9 +796,8 @@ impl AsyncWrite for GoogleDriveWriter {
                     progress_callback: None,
                     last_progress_time: std::time::Instant::now(),
                 };
-                if !chunk.is_empty() {
-                    writer.upload_chunk(&chunk, true).await?;
-                }
+                // 即使是空文件也需要上传（创建）
+                writer.upload_chunk(&chunk, true).await?;
                 Ok::<_, std::io::Error>(writer.uploaded_bytes)
             })
         }).join().map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "上传线程panic"))?;

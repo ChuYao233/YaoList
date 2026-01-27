@@ -615,3 +615,61 @@ pub async fn get_driver_space(
         }
     }
 }
+
+/// POST /api/driver/thunder/send_sms - 迅雷发送短信验证码
+pub async fn thunder_send_sms(
+    State(state): State<Arc<AppState>>,
+    cookies: Cookies,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_admin(&state, &cookies).await?;
+
+    let username = payload.get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let password = payload.get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if username.is_empty() || password.is_empty() {
+        return Ok(Json(json!({
+            "code": 400,
+            "message": "请先填写手机号和密码"
+        })));
+    }
+
+    // 创建临时客户端发送验证码
+    let input = format!("{}{}", username, password);
+    let device_id = format!("{:x}", md5::compute(input.as_bytes()));
+    let client = yaolist_backend::drivers::thunder::client::ThunderClient::new(
+        device_id,
+        String::new(),
+        String::new(),
+    );
+
+    // 尝试登录，触发短信发送
+    let result: Result<String, anyhow::Error> = client.core_login(username, password).await;
+    match result {
+        Ok(_) => {
+            // 登录成功，不需要验证码
+            Ok(Json(json!({
+                "code": 200,
+                "message": "登录成功，无需验证码"
+            })))
+        }
+        Err(e) => {
+            let msg: String = e.to_string();
+            if msg.contains("验证码已发送") {
+                Ok(Json(json!({
+                    "code": 200,
+                    "message": msg
+                })))
+            } else {
+                Ok(Json(json!({
+                    "code": 400,
+                    "message": msg
+                })))
+            }
+        }
+    }
+}

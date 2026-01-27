@@ -275,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/drivers/:id/delete", post(api::drivers::delete_driver))
         .route("/api/drivers/:id/reload", post(api::drivers::reload_driver))
         .route("/api/drivers/:id/space", get(api::drivers::get_driver_space))
+        .route("/api/driver/thunder/send_sms", post(api::drivers::thunder_send_sms))
         .route("/api/mounts", get(api::mounts::list_mounts))
         .route("/api/mounts", post(api::mounts::create_mount))
         .route("/api/mounts/:id", get(api::mounts::get_mount))
